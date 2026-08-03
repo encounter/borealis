@@ -23,7 +23,7 @@ set(BOREALIS_SENTRY_DSN "" CACHE STRING "Sentry DSN for borealis::sentry")
 set(BOREALIS_SENTRY_ENVIRONMENT "development" CACHE STRING "Sentry environment for borealis::sentry")
 set(BOREALIS_HTTP_BACKEND "auto" CACHE STRING "HTTP backend for borealis::http")
 set_property(CACHE BOREALIS_HTTP_BACKEND PROPERTY STRINGS auto winhttp urlsession curl android none)
-set(BOREALIS_AURORA_INCLUDE_DIR "" CACHE PATH "Path to the aurora include directory (if no aurora::core target)")
+set(BOREALIS_AURORA_DIR "" CACHE PATH "Path to an aurora source tree (if no aurora::core target)")
 
 if (NOT TARGET fmt::fmt)
     find_package(fmt 11 CONFIG QUIET)
@@ -64,15 +64,48 @@ target_include_directories(borealis_core INTERFACE
 target_compile_features(borealis_core INTERFACE cxx_std_20)
 target_compile_definitions(borealis_core INTERFACE BOREALIS_BUILD_TYPE="$<IF:$<BOOL:$<CONFIG>>,$<CONFIG>,None>")
 
+# For standalone builds, fetch Aurora main branch to use its CMake modules + includes
+set(_borealis_aurora_cmake_dir "")
+if (NOT TARGET aurora::core)
+    if (NOT BOREALIS_AURORA_DIR)
+        message(STATUS "borealis: fetching aurora sources")
+        include(FetchContent)
+        FetchContent_Declare(borealis_aurora
+                GIT_REPOSITORY https://github.com/encounter/aurora.git
+                GIT_TAG main
+                GIT_SHALLOW TRUE
+                SOURCE_SUBDIR include # avoid configuring cmake
+        )
+        FetchContent_MakeAvailable(borealis_aurora)
+        set(BOREALIS_AURORA_DIR "${borealis_aurora_SOURCE_DIR}")
+    endif ()
+    if (NOT EXISTS "${BOREALIS_AURORA_DIR}/include/aurora/aurora.h")
+        message(FATAL_ERROR "BOREALIS_AURORA_DIR is not an aurora source tree: ${BOREALIS_AURORA_DIR}")
+    endif ()
+    if (EXISTS "${BOREALIS_AURORA_DIR}/cmake/AuroraDependencyVersions.cmake")
+        set(_borealis_aurora_cmake_dir "${BOREALIS_AURORA_DIR}/cmake")
+        include("${_borealis_aurora_cmake_dir}/AuroraDependencyVersions.cmake")
+        if (WIN32)
+            set(_borealis_sdl3_provider_default vendor)
+        else ()
+            set(_borealis_sdl3_provider_default auto)
+        endif ()
+        set(AURORA_SDL3_PROVIDER "${_borealis_sdl3_provider_default}" CACHE STRING
+                "How to provide SDL3: auto, vendor (build from source), system (find_package/imported), or package (download prebuilt)")
+        set(AURORA_SDL3_LINKAGE "static" CACHE STRING "SDL3 linkage type preference")
+        set(AURORA_NOD_PROVIDER "auto" CACHE STRING
+                "How to provide nod: auto, vendor (build from source), system (find_package/imported), package (download prebuilt)")
+        set(AURORA_NOD_LINKAGE "static" CACHE STRING "nod linkage type preference")
+    endif ()
+endif ()
+
 add_library(borealis_log STATIC src/log.cpp)
 add_library(borealis::log ALIAS borealis_log)
 target_link_libraries(borealis_log PUBLIC borealis_core fmt::fmt)
 if (TARGET aurora::core)
     target_link_libraries(borealis_log PUBLIC aurora::core)
-elseif (BOREALIS_AURORA_INCLUDE_DIR)
-    target_include_directories(borealis_log PUBLIC ${BOREALIS_AURORA_INCLUDE_DIR})
 else ()
-    message(FATAL_ERROR "borealis::log requires aurora::core or BOREALIS_AURORA_INCLUDE_DIR")
+    target_include_directories(borealis_log PUBLIC ${BOREALIS_AURORA_DIR}/include)
 endif ()
 if (ANDROID)
     target_link_libraries(borealis_log PRIVATE log)
@@ -187,12 +220,37 @@ endif ()
 
 if (BOREALIS_ENABLE_DISC)
     set(_borealis_sdl_needed ON)
+    if (NOT TARGET aurora::dvd AND NOT TARGET nod::nod AND _borealis_aurora_cmake_dir)
+        include("${_borealis_aurora_cmake_dir}/AuroraNodProvider.cmake")
+    endif ()
     if (TARGET aurora::dvd)
         set(_borealis_nod_target aurora::dvd)
     elseif (TARGET nod::nod)
         set(_borealis_nod_target nod::nod)
     else ()
-        message(FATAL_ERROR "borealis::disc requires aurora::dvd or nod::nod")
+        message(FATAL_ERROR "borealis::disc requires aurora::dvd, nod::nod, or aurora sources "
+                "providing AuroraNodProvider.cmake")
+    endif ()
+
+    if (NOT TARGET xxhash AND NOT TARGET xxHash::xxhash)
+        message(STATUS "borealis: fetching xxhash")
+        include(FetchContent)
+        FetchContent_Declare(xxhash
+                URL https://github.com/Cyan4973/xxHash/archive/refs/tags/v0.8.3.tar.gz
+                URL_HASH SHA256=aae608dfe8213dfd05d909a57718ef82f30722c392344583d3f39050c7f29a80
+                SOURCE_SUBDIR cmake_unofficial
+                DOWNLOAD_EXTRACT_TIMESTAMP FALSE
+                EXCLUDE_FROM_ALL
+        )
+        set(XXHASH_BUILD_XXHSUM OFF CACHE INTERNAL "Build the xxhsum binary")
+        set(_borealis_had_bsl_cache OFF)
+        if (DEFINED CACHE{BUILD_SHARED_LIBS})
+            set(_borealis_had_bsl_cache ON)
+        endif ()
+        FetchContent_MakeAvailable(xxhash)
+        if (NOT _borealis_had_bsl_cache)
+            unset(BUILD_SHARED_LIBS CACHE)
+        endif ()
     endif ()
     if (TARGET xxhash)
         set(_borealis_xxhash_target xxhash)
@@ -337,7 +395,11 @@ endif ()
 
 if (_borealis_sdl_needed)
     if (NOT TARGET SDL3::SDL3 AND NOT TARGET SDL3::SDL3-static)
-        find_package(SDL3 CONFIG REQUIRED)
+        if (_borealis_aurora_cmake_dir)
+            include("${_borealis_aurora_cmake_dir}/AuroraSDL3Provider.cmake")
+        else ()
+            find_package(SDL3 CONFIG REQUIRED)
+        endif ()
     endif ()
     unset(_borealis_sdl_target)
     if (DEFINED AURORA_SDL3_TARGET AND NOT AURORA_SDL3_TARGET STREQUAL "")

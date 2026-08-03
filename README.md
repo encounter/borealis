@@ -35,9 +35,6 @@ add_subdirectory(extern/borealis EXCLUDE_FROM_ALL)
 target_link_libraries(mygame PRIVATE borealis::log)
 ```
 
-For standalone builds without an `aurora::core` target, set `BOREALIS_AURORA_INCLUDE_DIR` to Aurora's `include/`
-directory.
-
 ### Logging
 
 ```cpp
