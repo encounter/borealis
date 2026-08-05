@@ -65,6 +65,8 @@ Release parse_github_release(std::string_view json);
 struct Options {
     /** Version to compare against. */
     std::string_view currentVersion = BOREALIS_APP_DESCRIBE;
+    /** Include prereleases when resolving the newest published GitHub release. */
+    bool includePrereleases = false;
     /** Request transport. Defaults to http::get and bypasses availability checks when set. */
     std::function<http::Result(const http::Request&)> fetch;
     std::chrono::milliseconds timeout{10000};

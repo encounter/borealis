@@ -245,6 +245,27 @@ TEST(Update, CheckSendsExpectedRequest) {
     EXPECT_TRUE(sawAccept);
 }
 
+TEST(Update, CheckCanIncludePrereleases) {
+    http::Request seen;
+    Options options{
+        .currentVersion = "v1.4.0",
+        .includePrereleases = true,
+        .fetch =
+            [&](const http::Request& request) {
+                seen = request;
+                return ok_response(
+                    R"([{"tag_name":"v1.5.0-rc.1","prerelease":true,"draft":false}])");
+            },
+    };
+
+    const Result result = update::check_latest_github_release(TestApp, options);
+    EXPECT_EQ(result.status, Status::UpdateAvailable);
+    EXPECT_EQ(result.latest.tagName, "v1.5.0-rc.1");
+    EXPECT_EQ(
+        seen.url,
+        "https://api.github.com/repos/TwilitRealm/dusklight/releases?per_page=10");
+}
+
 TEST(Update, CheckFailurePaths) {
     const auto check = [](Options options) {
         return update::check_latest_github_release(TestApp, options);

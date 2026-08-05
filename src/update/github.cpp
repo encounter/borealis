@@ -4,6 +4,7 @@
 #include <nlohmann/json.hpp>
 
 #include <exception>
+#include <stdexcept>
 #include <utility>
 
 namespace borealis::update {
@@ -46,8 +47,28 @@ Release release_from_json(const json& value) {
     return release;
 }
 
-std::string release_url(std::string_view owner, std::string_view repo) {
+std::string release_url(std::string_view owner, std::string_view repo, bool includePrereleases) {
+    if (includePrereleases) {
+        return fmt::format("https://api.github.com/repos/{}/{}/releases?per_page=10", owner, repo);
+    }
     return fmt::format("https://api.github.com/repos/{}/{}/releases/latest", owner, repo);
+}
+
+Release parse_release_response(std::string_view value, bool includePrereleases) {
+    const json parsed = json::parse(value);
+    if (!includePrereleases) {
+        return release_from_json(parsed);
+    }
+    if (!parsed.is_array()) {
+        throw std::runtime_error("expected a GitHub releases array");
+    }
+    for (const auto& release : parsed) {
+        if (!release.is_object() || release.value("draft", false)) {
+            continue;
+        }
+        return release_from_json(release);
+    }
+    throw std::runtime_error("GitHub returned no published releases");
 }
 
 }  // namespace
@@ -76,7 +97,7 @@ Result check_latest_github_release(const AppInfo& info, const Options& options) 
     }
 
     const http::Request request{
-        .url = release_url(info.githubOwner, info.githubRepo),
+        .url = release_url(info.githubOwner, info.githubRepo, options.includePrereleases),
         .headers =
             {
                 {.name = "User-Agent", .value = user_agent(info)},
@@ -102,7 +123,7 @@ Result check_latest_github_release(const AppInfo& info, const Options& options) 
 
     Release latest;
     try {
-        latest = parse_github_release(result.response.body);
+        latest = parse_release_response(result.response.body, options.includePrereleases);
     } catch (const std::exception& e) {
         return {
             .status = Status::Failed,
