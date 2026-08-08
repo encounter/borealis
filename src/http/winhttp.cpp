@@ -185,7 +185,13 @@ const char* backend_name() noexcept {
     return "WinHTTP";
 }
 
-Result get(const Request& request) {
+Result request(const Request& request) {
+    if (request.body.size() > static_cast<size_t>(std::numeric_limits<DWORD>::max())) {
+        return {
+            .error = Error::TooLarge,
+            .message = "Request body exceeds the WinHTTP transport limit",
+        };
+    }
     if (request.url.empty()) {
         return {
             .error = Error::InvalidUrl,
@@ -243,7 +249,8 @@ Result get(const Request& request) {
         return fail_from_last_error("Failed to connect");
     }
 
-    WinHttpHandle httpRequest(WinHttpOpenRequest(connection, L"GET", path.c_str(), nullptr,
+    const wchar_t* method = request.method == Method::Post ? L"POST" : L"GET";
+    WinHttpHandle httpRequest(WinHttpOpenRequest(connection, method, path.c_str(), nullptr,
         WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE));
     if (httpRequest.handle == nullptr) {
         return fail_from_last_error("Failed to create request");
@@ -271,8 +278,10 @@ Result get(const Request& request) {
         }
     }
 
-    if (!WinHttpSendRequest(
-            httpRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0))
+    if (!WinHttpSendRequest(httpRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+            request.method == Method::Post && !request.body.empty() ? request.body.data() :
+                                                                        WINHTTP_NO_REQUEST_DATA,
+            request.method == Method::Post ? static_cast<DWORD>(request.body.size()) : 0, 0, 0))
     {
         return fail_from_last_error("Failed to send request");
     }
@@ -315,6 +324,13 @@ Result get(const Request& request) {
     return {
         .response = std::move(response),
     };
+}
+
+Result get(const Request& request) {
+    Request getRequest = request;
+    getRequest.method = Method::Get;
+    getRequest.body.clear();
+    return borealis::http::request(getRequest);
 }
 
 }  // namespace borealis::http

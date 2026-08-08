@@ -14,11 +14,18 @@ const char* backend_name() noexcept {
     return "none";
 }
 
-Result get(const Request&) {
+Result request(const Request&) {
     return {
         .error = Error::NoBackend,
         .message = "No HTTP backend is available",
     };
+}
+
+Result get(const Request& originalRequest) {
+    Request getRequest = originalRequest;
+    getRequest.method = Method::Get;
+    getRequest.body.clear();
+    return request(getRequest);
 }
 
 }  // namespace borealis::http

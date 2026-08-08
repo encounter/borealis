@@ -3,6 +3,7 @@ package dev.encounter.borealis;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.SocketTimeoutException;
@@ -45,8 +46,9 @@ public final class BorealisHttpClient {
     private BorealisHttpClient() {
     }
 
-    public static Response get(String url, String[] headerNames, String[] headerValues,
-                               int timeoutMs, long maxBodyBytes) {
+    public static Response request(String url, String method, byte[] requestBody,
+                                   String[] headerNames, String[] headerValues,
+                                   int timeoutMs, long maxBodyBytes) {
         if (url == null || url.isEmpty()) {
             return fail(ERROR_INVALID_URL, "URL is empty");
         }
@@ -61,12 +63,20 @@ public final class BorealisHttpClient {
                 HttpsURLConnection connection =
                         (HttpsURLConnection) currentUrl.openConnection();
                 try {
-                    connection.setRequestMethod("GET");
+                    connection.setRequestMethod(method);
                     connection.setConnectTimeout(timeoutMs);
                     connection.setReadTimeout(timeoutMs);
                     connection.setUseCaches(false);
                     connection.setInstanceFollowRedirects(false);
                     applyHeaders(connection, headerNames, headerValues);
+                    if ("POST".equals(method)) {
+                        connection.setDoOutput(true);
+                        if (requestBody != null && requestBody.length > 0) {
+                            try (OutputStream output = connection.getOutputStream()) {
+                                output.write(requestBody);
+                            }
+                        }
+                    }
 
                     int statusCode = connection.getResponseCode();
                     if (isRedirect(statusCode)) {
@@ -107,6 +117,11 @@ public final class BorealisHttpClient {
         } catch (ClassCastException e) {
             return fail(ERROR_UNSUPPORTED_SCHEME, "Only https:// URLs are supported");
         }
+    }
+
+    public static Response get(String url, String[] headerNames, String[] headerValues,
+                               int timeoutMs, long maxBodyBytes) {
+        return request(url, "GET", null, headerNames, headerValues, timeoutMs, maxBodyBytes);
     }
 
     private static void applyHeaders(HttpsURLConnection connection, String[] names,

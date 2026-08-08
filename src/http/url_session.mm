@@ -125,7 +125,7 @@ const char* backend_name() noexcept {
     return "NSURLSession";
 }
 
-Result get(const Request& request) {
+Result request(const Request& request) {
     @autoreleasepool {
         if (request.url.empty()) {
             return {
@@ -157,7 +157,11 @@ Result get(const Request& request) {
         }
 
         NSMutableURLRequest* urlRequest = [NSMutableURLRequest requestWithURL:url];
-        urlRequest.HTTPMethod = @"GET";
+        urlRequest.HTTPMethod = request.method == Method::Post ? @"POST" : @"GET";
+        if (request.method == Method::Post) {
+            NSData* body = [NSData dataWithBytes:request.body.data() length:request.body.size()];
+            urlRequest.HTTPBody = body;
+        }
         urlRequest.timeoutInterval = request.timeout.count() / 1000.0;
         urlRequest.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
         for (const Header& header : request.headers) {
@@ -233,6 +237,13 @@ Result get(const Request& request) {
             .response = std::move(response),
         };
     }
+}
+
+Result get(const Request& request) {
+    Request getRequest = request;
+    getRequest.method = Method::Get;
+    getRequest.body.clear();
+    return borealis::http::request(getRequest);
 }
 
 }  // namespace borealis::http

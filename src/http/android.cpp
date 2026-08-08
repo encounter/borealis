@@ -303,7 +303,13 @@ const char* backend_name() noexcept {
     return "Android";
 }
 
-Result get(const Request& request) {
+Result request(const Request& request) {
+    if (request.body.size() > static_cast<size_t>(std::numeric_limits<jsize>::max())) {
+        return {
+            .error = Error::TooLarge,
+            .message = "Request body exceeds the Android transport limit",
+        };
+    }
     if (request.url.empty()) {
         return {
             .error = Error::InvalidUrl,
@@ -345,10 +351,10 @@ Result get(const Request& request) {
         };
     }
 
-    jmethodID getMethod = env->GetStaticMethodID(clientClass, "get",
-        "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;IJ)"
+    jmethodID requestMethod = env->GetStaticMethodID(clientClass, "request",
+        "(Ljava/lang/String;Ljava/lang/String;[B[Ljava/lang/String;[Ljava/lang/String;IJ)"
         "Ldev/encounter/borealis/BorealisHttpClient$Response;");
-    if (getMethod == nullptr || clear_pending_exception(env)) {
+    if (requestMethod == nullptr || clear_pending_exception(env)) {
         env->DeleteLocalRef(clientClass);
         return {
             .error = Error::Network,
@@ -357,13 +363,26 @@ Result get(const Request& request) {
     }
 
     jstring url = to_jstring(env, request.url);
+    jstring method = to_jstring(env, request.method == Method::Post ? "POST" : "GET");
+    jbyteArray body = env->NewByteArray(static_cast<jsize>(request.body.size()));
+    if (body != nullptr && !request.body.empty()) {
+        env->SetByteArrayRegion(body, 0, static_cast<jsize>(request.body.size()),
+            reinterpret_cast<const jbyte*>(request.body.data()));
+    }
     jobjectArray headerNames = make_string_array(env, request.headers, true);
     jobjectArray headerValues = make_string_array(env, request.headers, false);
-    if (url == nullptr || headerNames == nullptr || headerValues == nullptr ||
+    if (url == nullptr || method == nullptr || body == nullptr ||
+        headerNames == nullptr || headerValues == nullptr ||
         clear_pending_exception(env))
     {
         if (url != nullptr) {
             env->DeleteLocalRef(url);
+        }
+        if (method != nullptr) {
+            env->DeleteLocalRef(method);
+        }
+        if (body != nullptr) {
+            env->DeleteLocalRef(body);
         }
         if (headerNames != nullptr) {
             env->DeleteLocalRef(headerNames);
@@ -378,9 +397,11 @@ Result get(const Request& request) {
         };
     }
 
-    jobject response = env->CallStaticObjectMethod(clientClass, getMethod, url, headerNames,
-        headerValues, timeout_ms(request.timeout), max_body_bytes(request.maxBodyBytes));
+    jobject response = env->CallStaticObjectMethod(clientClass, requestMethod, url, method, body,
+        headerNames, headerValues, timeout_ms(request.timeout), max_body_bytes(request.maxBodyBytes));
     env->DeleteLocalRef(url);
+    env->DeleteLocalRef(method);
+    env->DeleteLocalRef(body);
     env->DeleteLocalRef(headerNames);
     env->DeleteLocalRef(headerValues);
     env->DeleteLocalRef(clientClass);
@@ -396,6 +417,13 @@ Result get(const Request& request) {
         env->DeleteLocalRef(response);
     }
     return result;
+}
+
+Result get(const Request& request) {
+    Request getRequest = request;
+    getRequest.method = Method::Get;
+    getRequest.body.clear();
+    return borealis::http::request(getRequest);
 }
 
 }  // namespace borealis::http

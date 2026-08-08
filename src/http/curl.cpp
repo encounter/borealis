@@ -122,7 +122,7 @@ const char* backend_name() noexcept {
     return "libcurl";
 }
 
-Result get(const Request& request) {
+Result request(const Request& request) {
     if (request.url.empty()) {
         return {
             .error = Error::InvalidUrl,
@@ -163,7 +163,13 @@ Result get(const Request& request) {
     };
 
     curl_easy_setopt(curl, CURLOPT_URL, request.url.c_str());
-    curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+    if (request.method == Method::Post) {
+        curl_easy_setopt(curl, CURLOPT_POST, 1L);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request.body.data());
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, request.body.size());
+    } else {
+        curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+    }
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers.list);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
@@ -202,6 +208,13 @@ Result get(const Request& request) {
                                               curl_easy_strerror(code),
         .response = std::move(context.response),
     };
+}
+
+Result get(const Request& request) {
+    Request getRequest = request;
+    getRequest.method = Method::Get;
+    getRequest.body.clear();
+    return borealis::http::request(getRequest);
 }
 
 }  // namespace borealis::http

@@ -10,6 +10,16 @@ namespace {
 
 // Invalid requests keep these tests offline for every backend.
 
+TEST(Http, LegacyAggregateInitialization) {
+    const http::Request request{"https://example.com/", {}, std::chrono::milliseconds{123}, 456};
+    EXPECT_EQ(request.url, "https://example.com/");
+    EXPECT_TRUE(request.headers.empty());
+    EXPECT_EQ(request.timeout, std::chrono::milliseconds{123});
+    EXPECT_EQ(request.maxBodyBytes, 456u);
+    EXPECT_EQ(request.method, http::Method::Get);
+    EXPECT_TRUE(request.body.empty());
+}
+
 TEST(Http, BackendIdentity) {
     EXPECT_NE(http::backend_name(), nullptr);
     EXPECT_GT(std::strlen(http::backend_name()), 0);
@@ -25,6 +35,32 @@ TEST(Http, EmptyUrlRejected) {
     EXPECT_EQ(result.error, http::Error::InvalidUrl);
     EXPECT_FALSE(result.message.empty());
     EXPECT_EQ(result.response.statusCode, 0);
+}
+
+TEST(Http, RequestApiRejectsEmptyUrl) {
+    const http::Result result = http::request({
+        .url = "",
+        .method = http::Method::Post,
+        .body = "payload",
+    });
+    if (!http::available()) {
+        EXPECT_EQ(result.error, http::Error::NoBackend);
+        return;
+    }
+    EXPECT_EQ(result.error, http::Error::InvalidUrl);
+}
+
+TEST(Http, GetWrapperIgnoresMethodAndBody) {
+    const http::Result result = http::get({
+        .url = "",
+        .method = http::Method::Post,
+        .body = "payload",
+    });
+    if (!http::available()) {
+        EXPECT_EQ(result.error, http::Error::NoBackend);
+        return;
+    }
+    EXPECT_EQ(result.error, http::Error::InvalidUrl);
 }
 
 TEST(Http, PlaintextSchemeRejected) {
