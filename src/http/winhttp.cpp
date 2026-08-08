@@ -279,8 +279,9 @@ Result request(const Request& request) {
     }
 
     if (!WinHttpSendRequest(httpRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-            request.method == Method::Post && !request.body.empty() ? request.body.data() :
-                                                                        WINHTTP_NO_REQUEST_DATA,
+            request.method == Method::Post && !request.body.empty()
+                ? const_cast<char*>(request.body.data())
+                : WINHTTP_NO_REQUEST_DATA,
             request.method == Method::Post ? static_cast<DWORD>(request.body.size()) : 0, 0, 0))
     {
         return fail_from_last_error("Failed to send request");
