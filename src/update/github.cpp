@@ -1,4 +1,4 @@
-#include "borealis/update.hpp"
+#include "../update_internal.hpp"
 
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
@@ -71,32 +71,26 @@ Release parse_release_response(std::string_view value, bool includePrereleases) 
     throw std::runtime_error("GitHub returned no published releases");
 }
 
-}  // namespace
-
-Release parse_github_release(std::string_view value) {
-    return release_from_json(json::parse(value));
+Result failed_exception(const std::exception& exception) {
+    return {
+        .status = Status::Failed,
+        .message = fmt::format("Update check failed with exception: {}", exception.what()),
+    };
 }
 
-Result check_latest_github_release(const AppInfo& info, const Options& options) {
-    auto fetch = options.fetch;
-    if (!fetch) {
-        // Custom transports do not require a compiled-in backend.
-        if (!http::available()) {
-            return {
-                .status = Status::Disabled,
-                .message = "No HTTP backend is available",
-            };
-        }
-        fetch = http::get;
-    }
-    if (info.appName.empty() || info.githubOwner.empty() || info.githubRepo.empty()) {
-        return {
-            .status = Status::Failed,
-            .message = "AppInfo is missing appName, githubOwner, or githubRepo",
-        };
-    }
+Result failed_exception() {
+    return {
+        .status = Status::Failed,
+        .message = "Update check failed with an unknown exception",
+    };
+}
 
-    const http::Request request{
+}  // namespace
+
+namespace detail {
+
+http::Request make_request(const AppInfo& info, const Options& options) {
+    return {
         .url = release_url(info.githubOwner, info.githubRepo, options.includePrereleases),
         .headers =
             {
@@ -104,26 +98,30 @@ Result check_latest_github_release(const AppInfo& info, const Options& options) 
                 {.name = "Accept", .value = "application/vnd.github+json"},
                 {.name = "X-GitHub-Api-Version", .value = std::string(GitHubApiVersion)},
             },
-        .timeout = options.timeout,
+        .connectTimeout = options.timeout,
+        .idleTimeout = options.timeout,
+        .totalTimeout = options.timeout,
     };
+}
 
-    const http::Result result = fetch(request);
-    if (result.error != http::Error::None) {
+Result result_from_response(
+    http::Result response, std::string_view currentVersion, bool includePrereleases) {
+    if (response.error != http::Error::None) {
         return {
             .status = Status::Failed,
-            .message = result.message,
+            .message = std::move(response.message),
         };
     }
-    if (result.response.statusCode != 200) {
+    if (response.response.statusCode != 200) {
         return {
             .status = Status::Failed,
-            .message = fmt::format("GitHub returned HTTP {}", result.response.statusCode),
+            .message = fmt::format("GitHub returned HTTP {}", response.response.statusCode),
         };
     }
 
     Release latest;
     try {
-        latest = parse_release_response(result.response.body, options.includePrereleases);
+        latest = parse_release_response(response.response.body, includePrereleases);
     } catch (const std::exception& e) {
         return {
             .status = Status::Failed,
@@ -139,21 +137,57 @@ Result check_latest_github_release(const AppInfo& info, const Options& options) 
             .latest = std::move(latest),
         };
     }
-    const std::optional<Version> currentVersion = parse_version(options.currentVersion);
-    if (!currentVersion) {
+    const std::optional<Version> parsedCurrentVersion = parse_version(currentVersion);
+    if (!parsedCurrentVersion) {
         return {
             .status = Status::Failed,
-            .message = fmt::format("Failed to parse current version '{}'", options.currentVersion),
+            .message = fmt::format("Failed to parse current version '{}'", currentVersion),
             .latest = std::move(latest),
         };
     }
 
-    const bool updateAvailable = compare_version(*latestVersion, *currentVersion) > 0;
+    const bool updateAvailable = compare_version(*latestVersion, *parsedCurrentVersion) > 0;
     return {
         .status = updateAvailable ? Status::UpdateAvailable : Status::UpToDate,
         .message = updateAvailable ? "Update available" : "Up to date",
         .latest = std::move(latest),
     };
+}
+
+}  // namespace detail
+
+Release parse_github_release(std::string_view value) {
+    return release_from_json(json::parse(value));
+}
+
+Task<Result> check_latest_github_release(const AppInfo& info, const Options& options) {
+    if (!http::available()) {
+        return borealis::detail::make_ready_task(Result{
+            .status = Status::Disabled,
+            .message = "No HTTP backend is available",
+        });
+    }
+    if (info.appName.empty() || info.githubOwner.empty() || info.githubRepo.empty()) {
+        return borealis::detail::make_ready_task(Result{
+            .status = Status::Failed,
+            .message = "AppInfo is missing appName, githubOwner, or githubRepo",
+        });
+    }
+
+    std::string currentVersion{options.currentVersion};
+    const bool includePrereleases = options.includePrereleases;
+    return http::start(detail::make_request(info, options))
+        .map([currentVersion = std::move(currentVersion), includePrereleases](
+                 http::Result response) {
+            try {
+                return detail::result_from_response(
+                    std::move(response), currentVersion, includePrereleases);
+            } catch (const std::exception& exception) {
+                return failed_exception(exception);
+            } catch (...) {
+                return failed_exception();
+            }
+        });
 }
 
 }  // namespace borealis::update

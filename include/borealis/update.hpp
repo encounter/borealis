@@ -5,7 +5,6 @@
 #include "borealis/version.h"
 
 #include <chrono>
-#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -67,12 +66,10 @@ struct Options {
     std::string_view currentVersion = BOREALIS_APP_DESCRIBE;
     /** Include prereleases when resolving the newest published GitHub release. */
     bool includePrereleases = false;
-    /** Request transport. Defaults to http::get and bypasses availability checks when set. */
-    std::function<http::Result(const http::Request&)> fetch;
     std::chrono::milliseconds timeout{10000};
 };
 
-/** Checks the latest GitHub release against the current version. Never throws. */
-Result check_latest_github_release(const AppInfo& info, const Options& options = {});
+/** Checks the latest GitHub release against the current version. */
+Task<Result> check_latest_github_release(const AppInfo& info, const Options& options = {});
 
 }  // namespace borealis::update
