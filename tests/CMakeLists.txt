@@ -20,6 +20,10 @@ add_executable(borealis_version_test version_test.cpp)
 target_link_libraries(borealis_version_test PRIVATE borealis::core)
 borealis_add_gtest(borealis_version_test)
 
+add_executable(borealis_task_test task_test.cpp)
+target_link_libraries(borealis_task_test PRIVATE borealis::core)
+borealis_add_gtest(borealis_task_test)
+
 add_executable(borealis_presentation_test presentation_test.cpp)
 target_link_libraries(borealis_presentation_test PRIVATE borealis::presentation)
 borealis_add_gtest(borealis_presentation_test)
@@ -66,12 +70,14 @@ endif ()
 
 if (TARGET borealis_http)
     add_executable(borealis_http_test http_test.cpp)
-    target_link_libraries(borealis_http_test PRIVATE borealis::http)
+    target_include_directories(borealis_http_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+    target_link_libraries(borealis_http_test PRIVATE borealis::http borealis_json_dep)
     borealis_add_gtest(borealis_http_test)
 endif ()
 
 if (TARGET borealis_update)
     add_executable(borealis_update_test update_test.cpp)
+    target_include_directories(borealis_update_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
     target_link_libraries(borealis_update_test PRIVATE borealis::update)
     target_compile_definitions(borealis_update_test PRIVATE
             BOREALIS_TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")

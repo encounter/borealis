@@ -321,6 +321,7 @@ endif ()
 add_library(borealis::discord ALIAS borealis_discord)
 
 if (BOREALIS_ENABLE_HTTP)
+    set(_borealis_json_needed ON)
     set(_borealis_http_backend "${BOREALIS_HTTP_BACKEND}")
     set(_borealis_http_explicit TRUE)
     if (_borealis_http_backend STREQUAL "auto")
@@ -363,9 +364,17 @@ if (BOREALIS_ENABLE_HTTP)
         message(FATAL_ERROR "borealis::http: unknown BOREALIS_HTTP_BACKEND '${BOREALIS_HTTP_BACKEND}'")
     endif ()
 
-    add_library(borealis_http STATIC ${_borealis_http_source})
+    find_package(Threads REQUIRED)
+    add_library(borealis_http STATIC
+            src/http.cpp
+            src/http_download.cpp
+            src/http_io.cpp
+            ${_borealis_http_source}
+    )
     add_library(borealis::http ALIAS borealis_http)
-    target_link_libraries(borealis_http PUBLIC borealis_core)
+    target_link_libraries(borealis_http
+            PUBLIC borealis_core
+            PRIVATE borealis_json_dep Threads::Threads)
 
     if (_borealis_http_backend STREQUAL "winhttp")
         target_link_libraries(borealis_http PRIVATE winhttp)

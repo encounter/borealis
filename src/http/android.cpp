@@ -1,12 +1,16 @@
 #include "borealis/http.hpp"
 
+#include "../http_internal.hpp"
+
 #include <SDL3/SDL_system.h>
 #include <jni.h>
 
 #include <algorithm>
 #include <limits>
+#include <span>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace borealis::http {
 namespace {
@@ -15,7 +19,7 @@ constexpr int JavaErrorNone = 0;
 constexpr int JavaErrorInvalidUrl = 1;
 constexpr int JavaErrorUnsupportedScheme = 2;
 constexpr int JavaErrorTimeout = 3;
-constexpr int JavaErrorTooLarge = 4;
+constexpr int JavaErrorCanceled = 4;
 
 int timeout_ms(std::chrono::milliseconds timeout) {
     const auto count = std::max<std::chrono::milliseconds::rep>(1, timeout.count());
@@ -23,9 +27,13 @@ int timeout_ms(std::chrono::milliseconds timeout) {
         std::min<std::chrono::milliseconds::rep>(count, std::numeric_limits<int>::max()));
 }
 
-jlong max_body_bytes(size_t maxBodyBytes) {
-    return static_cast<jlong>(
-        std::min<size_t>(maxBodyBytes, static_cast<size_t>(std::numeric_limits<jlong>::max())));
+jlong total_timeout_ms(const detail::Deadline& deadline) {
+    const auto remaining = deadline.remaining_total();
+    if (!remaining) {
+        return 0;
+    }
+    return static_cast<jlong>(std::min<std::chrono::milliseconds::rep>(
+        remaining->count(), std::numeric_limits<jlong>::max()));
 }
 
 bool clear_pending_exception(JNIEnv* env) {
@@ -47,7 +55,7 @@ std::string to_string(JNIEnv* env, jstring value) {
         return {};
     }
 
-    std::string result(utf8);
+    std::string result{utf8};
     env->ReleaseStringUTFChars(value, utf8);
     return result;
 }
@@ -56,7 +64,7 @@ jstring to_jstring(JNIEnv* env, std::string_view value) {
     if (env == nullptr) {
         return nullptr;
     }
-    return env->NewStringUTF(std::string(value).c_str());
+    return env->NewStringUTF(std::string{value}.c_str());
 }
 
 Error map_java_error(int error) {
@@ -69,8 +77,8 @@ Error map_java_error(int error) {
         return Error::UnsupportedScheme;
     case JavaErrorTimeout:
         return Error::Timeout;
-    case JavaErrorTooLarge:
-        return Error::TooLarge;
+    case JavaErrorCanceled:
+        return Error::Canceled;
     default:
         return Error::Network;
     }
@@ -121,7 +129,6 @@ jclass load_app_class(JNIEnv* env, jobject activity, const char* className) {
     if (loadedClass == nullptr || clear_pending_exception(env)) {
         return nullptr;
     }
-
     return loadedClass;
 }
 
@@ -153,7 +160,6 @@ jobjectArray make_string_array(JNIEnv* env, const std::vector<Header>& headers, 
             return nullptr;
         }
     }
-
     return array;
 }
 
@@ -175,8 +181,7 @@ std::vector<Header> read_headers(JNIEnv* env, jobjectArray names, jobjectArray v
             if (value != nullptr) {
                 env->DeleteLocalRef(value);
             }
-            headers.clear();
-            return headers;
+            return {};
         }
 
         if (name != nullptr) {
@@ -185,7 +190,6 @@ std::vector<Header> read_headers(JNIEnv* env, jobjectArray names, jobjectArray v
                 .value = to_string(env, value),
             });
         }
-
         if (name != nullptr) {
             env->DeleteLocalRef(name);
         }
@@ -193,27 +197,29 @@ std::vector<Header> read_headers(JNIEnv* env, jobjectArray names, jobjectArray v
             env->DeleteLocalRef(value);
         }
     }
-
     return headers;
 }
 
-std::string read_body(JNIEnv* env, jbyteArray body) {
-    if (body == nullptr) {
-        return {};
+jbyteArray make_byte_array(JNIEnv* env, std::string_view value) {
+    if (value.size() > static_cast<size_t>(std::numeric_limits<jsize>::max())) {
+        return nullptr;
     }
-
-    const jsize bodySize = env->GetArrayLength(body);
-    std::string result(static_cast<size_t>(bodySize), '\0');
-    if (bodySize > 0) {
-        env->GetByteArrayRegion(body, 0, bodySize, reinterpret_cast<jbyte*>(result.data()));
+    jbyteArray result = env->NewByteArray(static_cast<jsize>(value.size()));
+    if (result == nullptr || clear_pending_exception(env)) {
+        return nullptr;
+    }
+    if (!value.empty()) {
+        env->SetByteArrayRegion(result, 0, static_cast<jsize>(value.size()),
+            reinterpret_cast<const jbyte*>(value.data()));
         if (clear_pending_exception(env)) {
-            return {};
+            env->DeleteLocalRef(result);
+            return nullptr;
         }
     }
     return result;
 }
 
-Result result_from_response(JNIEnv* env, jobject response) {
+detail::TransportResult result_from_response(JNIEnv* env, jobject response) {
     if (response == nullptr) {
         return {
             .error = Error::Network,
@@ -231,17 +237,8 @@ Result result_from_response(JNIEnv* env, jobject response) {
 
     jfieldID errorField = env->GetFieldID(responseClass, "error", "I");
     jfieldID messageField = env->GetFieldID(responseClass, "message", "Ljava/lang/String;");
-    jfieldID statusField = env->GetFieldID(responseClass, "statusCode", "I");
-    jfieldID headerNamesField =
-        env->GetFieldID(responseClass, "headerNames", "[Ljava/lang/String;");
-    jfieldID headerValuesField =
-        env->GetFieldID(responseClass, "headerValues", "[Ljava/lang/String;");
-    jfieldID bodyField = env->GetFieldID(responseClass, "body", "[B");
     env->DeleteLocalRef(responseClass);
-    if (errorField == nullptr || messageField == nullptr || statusField == nullptr ||
-        headerNamesField == nullptr || headerValuesField == nullptr || bodyField == nullptr ||
-        clear_pending_exception(env))
-    {
+    if (errorField == nullptr || messageField == nullptr || clear_pending_exception(env)) {
         return {
             .error = Error::Network,
             .message = "Android HTTP response shape was not recognized",
@@ -250,42 +247,19 @@ Result result_from_response(JNIEnv* env, jobject response) {
 
     const int javaError = env->GetIntField(response, errorField);
     auto* message = static_cast<jstring>(env->GetObjectField(response, messageField));
-    auto* headerNames = static_cast<jobjectArray>(env->GetObjectField(response, headerNamesField));
-    auto* headerValues =
-        static_cast<jobjectArray>(env->GetObjectField(response, headerValuesField));
-    auto* body = static_cast<jbyteArray>(env->GetObjectField(response, bodyField));
     if (clear_pending_exception(env)) {
         return {
             .error = Error::Network,
             .message = "Failed to read Android HTTP response",
         };
     }
-
-    Response httpResponse{
-        .statusCode = static_cast<int>(env->GetIntField(response, statusField)),
-        .headers = read_headers(env, headerNames, headerValues),
-        .body = read_body(env, body),
-    };
-
     std::string messageString = to_string(env, message);
-
     if (message != nullptr) {
         env->DeleteLocalRef(message);
     }
-    if (headerNames != nullptr) {
-        env->DeleteLocalRef(headerNames);
-    }
-    if (headerValues != nullptr) {
-        env->DeleteLocalRef(headerValues);
-    }
-    if (body != nullptr) {
-        env->DeleteLocalRef(body);
-    }
-
     return {
         .error = map_java_error(javaError),
         .message = std::move(messageString),
-        .response = std::move(httpResponse),
     };
 }
 
@@ -303,20 +277,7 @@ const char* backend_name() noexcept {
     return "Android";
 }
 
-Result get(const Request& request) {
-    if (request.url.empty()) {
-        return {
-            .error = Error::InvalidUrl,
-            .message = "URL is empty",
-        };
-    }
-    if (!request.url.starts_with("https://")) {
-        return {
-            .error = Error::UnsupportedScheme,
-            .message = "Only https:// URLs are supported",
-        };
-    }
-
+detail::TransportResult detail::send_request(const TransportRequest& request) {
     auto* env = static_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
     if (env == nullptr) {
         return {
@@ -345,10 +306,10 @@ Result get(const Request& request) {
         };
     }
 
-    jmethodID getMethod = env->GetStaticMethodID(clientClass, "get",
-        "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;IJ)"
+    jmethodID requestMethod = env->GetStaticMethodID(clientClass, "request",
+        "(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;[BIIJJJ)"
         "Ldev/encounter/borealis/BorealisHttpClient$Response;");
-    if (getMethod == nullptr || clear_pending_exception(env)) {
+    if (requestMethod == nullptr || clear_pending_exception(env)) {
         env->DeleteLocalRef(clientClass);
         return {
             .error = Error::Network,
@@ -356,12 +317,18 @@ Result get(const Request& request) {
         };
     }
 
+    jstring method = to_jstring(env, request.method == Method::Post ? "POST" : "GET");
     jstring url = to_jstring(env, request.url);
     jobjectArray headerNames = make_string_array(env, request.headers, true);
     jobjectArray headerValues = make_string_array(env, request.headers, false);
-    if (url == nullptr || headerNames == nullptr || headerValues == nullptr ||
-        clear_pending_exception(env))
+    jbyteArray body = make_byte_array(
+        env, request.method == Method::Post ? std::string_view{request.body} : std::string_view{});
+    if (method == nullptr || url == nullptr || headerNames == nullptr || headerValues == nullptr ||
+        body == nullptr || clear_pending_exception(env))
     {
+        if (method != nullptr) {
+            env->DeleteLocalRef(method);
+        }
         if (url != nullptr) {
             env->DeleteLocalRef(url);
         }
@@ -371,6 +338,9 @@ Result get(const Request& request) {
         if (headerValues != nullptr) {
             env->DeleteLocalRef(headerValues);
         }
+        if (body != nullptr) {
+            env->DeleteLocalRef(body);
+        }
         env->DeleteLocalRef(clientClass);
         return {
             .error = Error::Network,
@@ -378,11 +348,16 @@ Result get(const Request& request) {
         };
     }
 
-    jobject response = env->CallStaticObjectMethod(clientClass, getMethod, url, headerNames,
-        headerValues, timeout_ms(request.timeout), max_body_bytes(request.maxBodyBytes));
+    jobject response = env->CallStaticObjectMethod(clientClass, requestMethod, method, url,
+        headerNames, headerValues, body, timeout_ms(request.deadline->connect_timeout()),
+        timeout_ms(request.deadline->idle_timeout()), total_timeout_ms(*request.deadline),
+        static_cast<jlong>(reinterpret_cast<std::uintptr_t>(request.observer)),
+        static_cast<jlong>(reinterpret_cast<std::uintptr_t>(request.signals)));
+    env->DeleteLocalRef(method);
     env->DeleteLocalRef(url);
     env->DeleteLocalRef(headerNames);
     env->DeleteLocalRef(headerValues);
+    env->DeleteLocalRef(body);
     env->DeleteLocalRef(clientClass);
     if (clear_pending_exception(env)) {
         return {
@@ -391,7 +366,7 @@ Result get(const Request& request) {
         };
     }
 
-    Result result = result_from_response(env, response);
+    TransportResult result = result_from_response(env, response);
     if (response != nullptr) {
         env->DeleteLocalRef(response);
     }
@@ -399,3 +374,60 @@ Result get(const Request& request) {
 }
 
 }  // namespace borealis::http
+
+extern "C" JNIEXPORT jboolean JNICALL Java_dev_encounter_borealis_BorealisHttpClient_onResponse(
+    JNIEnv* env, jclass, jlong observerAddress, jint statusCode, jobjectArray headerNames,
+    jobjectArray headerValues) {
+    try {
+        auto* observer = reinterpret_cast<borealis::http::detail::TransportObserver*>(
+            static_cast<std::uintptr_t>(observerAddress));
+        if (observer == nullptr) {
+            return JNI_TRUE;
+        }
+        std::vector<borealis::http::Header> headers =
+            borealis::http::read_headers(env, headerNames, headerValues);
+        return observer->on_response(static_cast<int>(statusCode), std::move(headers)) ==
+                       borealis::http::detail::TransportObserver::Directive::Abort ?
+                   JNI_TRUE :
+                   JNI_FALSE;
+    } catch (...) {
+        return JNI_TRUE;
+    }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_dev_encounter_borealis_BorealisHttpClient_onData(
+    JNIEnv* env, jclass, jlong observerAddress, jbyteArray data, jint length) {
+    try {
+        auto* observer = reinterpret_cast<borealis::http::detail::TransportObserver*>(
+            static_cast<std::uintptr_t>(observerAddress));
+        if (observer == nullptr || data == nullptr || length < 0 ||
+            length > env->GetArrayLength(data))
+        {
+            return JNI_TRUE;
+        }
+
+        std::vector<std::byte> bytes(static_cast<size_t>(length));
+        if (length > 0) {
+            env->GetByteArrayRegion(data, 0, length, reinterpret_cast<jbyte*>(bytes.data()));
+            if (env->ExceptionCheck()) {
+                env->ExceptionClear();
+                return JNI_TRUE;
+            }
+        }
+        return observer->on_data(bytes) ==
+                       borealis::http::detail::TransportObserver::Directive::Abort ?
+                   JNI_TRUE :
+                   JNI_FALSE;
+    } catch (...) {
+        return JNI_TRUE;
+    }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_dev_encounter_borealis_BorealisHttpClient_isCanceled(
+    JNIEnv*, jclass, jlong signalsAddress) {
+    auto* signals = reinterpret_cast<borealis::detail::TaskSignals*>(
+        static_cast<std::uintptr_t>(signalsAddress));
+    return signals != nullptr && signals->cancelRequested.load(std::memory_order_relaxed) ?
+               JNI_TRUE :
+               JNI_FALSE;
+}

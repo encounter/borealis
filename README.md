@@ -17,7 +17,7 @@ Supported platforms: Windows, Linux, Android, macOS, iOS and tvOS.
 | `borealis::disc`         | Disc inspection and hash verification                                   | ✅       |
 | `borealis::discord`      | Discord rich presence IPC client                                        | ✅       |
 | `borealis::file_select`  | Cross-platform file/folder selection                                    | ✅       |
-| `borealis::http`         | Synchronous HTTP client                                                 | ✅       |
+| `borealis::http`         | Asynchronous HTTP client                                                | ✅       |
 | `borealis::log`          | fmt-based logging + sinks (console, rotating file, logcat, ring buffer) | ✅       |
 | `borealis::presentation` | Android frame-rate configuration                                        | ✅       |
 | `borealis::sentry`       | Optional sentry-native/crashpad integration and consent state           | ✅       |
@@ -78,13 +78,21 @@ inline constexpr borealis::AppInfo AppInfo{
 
 ### HTTP and update checks
 
-`borealis::http` provides a synchronous HTTP client using WinHTTP on Windows, NSURLSession on Apple, libcurl on Linux or
-JNI on Android.
+`borealis::http` provides pollable asynchronous HTTPS requests using WinHTTP on Windows, NSURLSession on Apple, libcurl
+on Linux or JNI on Android. Call `http::initialize()` after SDL startup and `http::shutdown()` before SDL shutdown. The
+worker pool grows on demand and releases idle threads automatically.
+
+Asynchronous operations return a move-only `Task<T>`. Poll with `ready()` or `try_take()`, request cooperative
+cancellation with `cancel()`, and use `map()` to transform results without creating another worker.
+
+File download and automatic range-resume behavior is documented in [docs/http.md](docs/http.md).
 
 ```cpp
-const auto result = borealis::update::check_latest_github_release(AppInfo);
-if (result.status == borealis::update::Status::UpdateAvailable) {
-    show_update_prompt(result.latest.tagName, result.latest.htmlUrl);
+auto check = borealis::update::start_latest_github_release_check(AppInfo);
+// Poll from the main loop.
+if (auto result = check.try_take();
+    result && result->status == borealis::update::Status::UpdateAvailable) {
+    show_update_prompt(result->latest.tagName, result->latest.htmlUrl);
 }
 ```
 

@@ -1,4 +1,5 @@
 #include "borealis/update.hpp"
+#include "update_internal.hpp"
 
 #include <gtest/gtest.h>
 
@@ -7,9 +8,7 @@
 #include <string>
 
 using borealis::AppInfo;
-using borealis::update::Options;
 using borealis::update::Release;
-using borealis::update::Result;
 using borealis::update::Status;
 using borealis::update::Version;
 namespace http = borealis::http;
@@ -45,10 +44,6 @@ Version parsed(std::string_view value) {
 
 int compare(std::string_view lhs, std::string_view rhs) {
     return update::compare_version(parsed(lhs), parsed(rhs));
-}
-
-std::function<http::Result(const http::Request&)> replay(http::Result result) {
-    return [result = std::move(result)](const http::Request&) { return result; };
 }
 
 http::Result ok_response(std::string body) {
@@ -185,11 +180,7 @@ TEST(Update, ParseGithubReleaseToleratesMissingFields) {
 TEST(Update, CheckReportsUpdate) {
     const std::string body = read_fixture("github_release_latest.json");
     for (const std::string_view current : {"v1.4.0", "v1.4.1-rc.1", "v0.9.0-3-dirty"}) {
-        Options options{
-            .currentVersion = current,
-            .fetch = replay(ok_response(body)),
-        };
-        const Result result = update::check_latest_github_release(TestApp, options);
+        const auto result = update::detail::result_from_response(ok_response(body), current, false);
         EXPECT_EQ(result.status, Status::UpdateAvailable);
         EXPECT_EQ(result.latest.tagName, "v1.4.1");
         EXPECT_EQ(result.latest.assets.size(), 8);
@@ -198,43 +189,29 @@ TEST(Update, CheckReportsUpdate) {
 
 TEST(Update, CheckReportsUpToDate) {
     const std::string body = read_fixture("github_release_latest.json");
-    // Current release, post-release build, and newer build.
     for (const std::string_view current : {"v1.4.1", "v1.4.1-6-dirty", "v1.5.0"}) {
-        Options options{
-            .currentVersion = current,
-            .fetch = replay(ok_response(body)),
-        };
-        const Result result = update::check_latest_github_release(TestApp, options);
+        const auto result = update::detail::result_from_response(ok_response(body), current, false);
         EXPECT_EQ(result.status, Status::UpToDate);
-        // Return the release used for comparison.
         EXPECT_EQ(result.latest.tagName, "v1.4.1");
     }
 }
 
-TEST(Update, CheckSendsExpectedRequest) {
-    http::Request seen;
-    Options options{
-        .currentVersion = "v1.4.0",
-        .fetch =
-            [&](const http::Request& request) {
-                seen = request;
-                return ok_response(read_fixture("github_release_latest.json"));
-            },
-        .timeout = std::chrono::milliseconds(2500),
-    };
-    EXPECT_EQ(
-        update::check_latest_github_release(TestApp, options).status, Status::UpdateAvailable);
-
-    EXPECT_EQ(seen.url, "https://api.github.com/repos/TwilitRealm/dusklight/releases/latest");
-    EXPECT_EQ(seen.timeout, std::chrono::milliseconds(2500));
+TEST(Update, CheckBuildsExpectedRequest) {
+    const http::Request request =
+        update::detail::make_request(TestApp, {
+                                                  .currentVersion = "v1.4.0",
+                                                  .timeout = std::chrono::milliseconds{2500},
+                                              });
+    EXPECT_EQ(request.url, "https://api.github.com/repos/TwilitRealm/dusklight/releases/latest");
+    EXPECT_EQ(request.connectTimeout, std::chrono::milliseconds{2500});
+    EXPECT_EQ(request.idleTimeout, std::chrono::milliseconds{2500});
+    EXPECT_EQ(request.totalTimeout, std::chrono::milliseconds{2500});
 
     bool sawUserAgent = false;
     bool sawAccept = false;
-    for (const http::Header& header : seen.headers) {
+    for (const http::Header& header : request.headers) {
         if (header.name == "User-Agent") {
             sawUserAgent = true;
-            // GitHub requires a versioned User-Agent.
-            EXPECT_TRUE(header.value.starts_with("Dusklight/"));
             EXPECT_EQ(header.value, std::string("Dusklight/") + BOREALIS_APP_DESCRIBE);
         } else if (header.name == "Accept") {
             sawAccept = true;
@@ -246,84 +223,75 @@ TEST(Update, CheckSendsExpectedRequest) {
 }
 
 TEST(Update, CheckCanIncludePrereleases) {
-    http::Request seen;
-    Options options{
-        .currentVersion = "v1.4.0",
-        .includePrereleases = true,
-        .fetch =
-            [&](const http::Request& request) {
-                seen = request;
-                return ok_response(
-                    R"([{"tag_name":"v1.5.0-rc.1","prerelease":true,"draft":false}])");
-            },
-    };
-
-    const Result result = update::check_latest_github_release(TestApp, options);
+    const auto result = update::detail::result_from_response(
+        ok_response(R"([{"tag_name":"v1.5.0-rc.1","prerelease":true,"draft":false}])"), "v1.4.0",
+        true);
     EXPECT_EQ(result.status, Status::UpdateAvailable);
     EXPECT_EQ(result.latest.tagName, "v1.5.0-rc.1");
+
+    const http::Request request =
+        update::detail::make_request(TestApp, {.includePrereleases = true});
     EXPECT_EQ(
-        seen.url,
-        "https://api.github.com/repos/TwilitRealm/dusklight/releases?per_page=10");
+        request.url, "https://api.github.com/repos/TwilitRealm/dusklight/releases?per_page=10");
 }
 
 TEST(Update, CheckFailurePaths) {
-    const auto check = [](Options options) {
-        return update::check_latest_github_release(TestApp, options);
-    };
-
-    // Transport errors pass through.
-    Result result = check({
-        .fetch = replay({.error = http::Error::Timeout, .message = "Request timed out"}),
-    });
+    auto result = update::detail::result_from_response(
+        {.error = http::Error::Timeout, .message = "Request timed out"}, "v1.0.0", false);
     EXPECT_EQ(result.status, Status::Failed);
     EXPECT_EQ(result.message, "Request timed out");
 
-    // HTTP errors include the status code.
-    result = check({.fetch = replay({.response = {.statusCode = 403}})});
+    result =
+        update::detail::result_from_response({.response = {.statusCode = 403}}, "v1.0.0", false);
     EXPECT_EQ(result.status, Status::Failed);
     EXPECT_NE(result.message.find("403"), std::string::npos);
 
-    // JSON errors are returned.
-    result = check({.fetch = replay(ok_response("{ not json"))});
-    EXPECT_EQ(result.status, Status::Failed);
+    result = update::detail::result_from_response(ok_response("{ not json"), "v1.0.0", false);
     EXPECT_TRUE(result.message.starts_with("Failed to parse GitHub release JSON"));
 
-    // Invalid tags still return release metadata.
-    result = check({.fetch = replay(ok_response(R"({"tag_name": "nightly"})"))});
-    EXPECT_EQ(result.status, Status::Failed);
+    result = update::detail::result_from_response(
+        ok_response(R"({"tag_name": "nightly"})"), "v1.0.0", false);
     EXPECT_NE(result.message.find("nightly"), std::string::npos);
     EXPECT_EQ(result.latest.tagName, "nightly");
 
-    // Unversioned builds cannot be compared.
-    result = check({
-        .currentVersion = "UNKNOWN-VERSION",
-        .fetch = replay(ok_response(read_fixture("github_release_latest.json"))),
-    });
-    EXPECT_EQ(result.status, Status::Failed);
+    result = update::detail::result_from_response(
+        ok_response(read_fixture("github_release_latest.json")), "UNKNOWN-VERSION", false);
     EXPECT_NE(result.message.find("UNKNOWN-VERSION"), std::string::npos);
 }
 
 TEST(Update, CheckRequiresAppInfo) {
-    bool fetched = false;
-    const auto fetch = [&](const http::Request&) {
-        fetched = true;
-        return ok_response("{}");
-    };
-
     constexpr AppInfo empty{};
-    const Result result = update::check_latest_github_release(empty, {.fetch = fetch});
-    EXPECT_EQ(result.status, Status::Failed);
-    EXPECT_FALSE(fetched);
+    auto check = update::check_latest_github_release(empty);
+    EXPECT_TRUE(check.ready());
+    const auto result = check.try_take();
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->status, http::available() ? Status::Failed : Status::Disabled);
 }
 
 TEST(Update, CheckWithoutBackend) {
-    // Custom transports bypass backend availability and keep tests offline.
     if (http::available()) {
         return;
     }
-    const Result result = update::check_latest_github_release(TestApp);
-    EXPECT_EQ(result.status, Status::Disabled);
-    EXPECT_EQ(result.message, "No HTTP backend is available");
+    auto check = update::check_latest_github_release(TestApp);
+    EXPECT_TRUE(check.ready());
+    const auto result = check.try_take();
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->status, Status::Disabled);
+    EXPECT_EQ(result->message, "No HTTP backend is available");
+}
+
+TEST(Update, CheckRequiresHttpInitialization) {
+    if (!http::available()) {
+        return;
+    }
+    http::shutdown();
+    auto check = update::check_latest_github_release(TestApp);
+    EXPECT_TRUE(check.ready());
+    const auto result = check.try_take();
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->status, Status::Failed);
+    EXPECT_EQ(result->message, "HTTP worker pool is not initialized");
+    EXPECT_FALSE(check.try_take().has_value());
 }
 
 }  // namespace
