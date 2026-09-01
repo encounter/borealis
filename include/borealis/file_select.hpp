@@ -39,6 +39,13 @@ struct FolderOptions {
     bool requireRealPath = false;
 };
 
+struct ExportOptions {
+    SDL_Window* parentWindow = nullptr;
+    std::string sourceLocation;
+    std::string suggestedName;
+    std::vector<Filter> filters;
+};
+
 struct Result {
     Status status = Status::Failed;
     /** Opaque locations accepted by borealis::io. */
@@ -50,6 +57,7 @@ struct Result {
 struct Capabilities {
     bool canOpenFile = false;
     bool canOpenFolder = false;
+    bool canExportFile = false;
 };
 
 using Callback = std::function<void(Result)>;
@@ -68,5 +76,8 @@ void open_file(FileOptions options, Callback callback);
 
 /** Opens a non-blocking single-folder dialog with the same callback contract. */
 void open_folder(FolderOptions options, Callback callback);
+
+/** Exports a readable location to a destination chosen by the user. */
+void export_file(ExportOptions options, Callback callback);
 
 }  // namespace borealis::file_select

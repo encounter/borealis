@@ -38,6 +38,13 @@ if (TARGET borealis_io)
     borealis_add_gtest(borealis_io_test)
 endif ()
 
+if (TARGET borealis_file_select)
+    add_executable(borealis_file_select_test file_select_test.cpp)
+    target_include_directories(borealis_file_select_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+    target_link_libraries(borealis_file_select_test PRIVATE borealis::file_select)
+    borealis_add_gtest(borealis_file_select_test)
+endif ()
+
 if (TARGET borealis_data)
     add_executable(borealis_data_test data_test.cpp)
     target_include_directories(borealis_data_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)

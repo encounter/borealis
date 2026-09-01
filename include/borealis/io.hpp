@@ -18,6 +18,7 @@ enum class Status {
     NotFound,
     Unsupported,
     Failed,
+    AlreadyExists,
 };
 
 struct OpenResult;
@@ -85,6 +86,9 @@ struct JoinResult {
 
 /** Resolves an existing child in a folder. */
 JoinResult join(std::string_view folder, std::string_view relativePath);
+
+/** Creates an empty file in a folder without replacing an existing child. */
+JoinResult create_child(std::string_view folder, std::string_view name);
 
 struct Entry {
     std::string name;

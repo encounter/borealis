@@ -11,10 +11,12 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.ParcelFileDescriptor;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 import android.provider.Settings;
 import android.util.Log;
+import android.webkit.MimeTypeMap;
 import android.view.Display;
 import android.view.Surface;
 import android.view.SurfaceHolder;
@@ -29,22 +31,28 @@ import org.libsdl.app.SDLActivity;
 import org.libsdl.app.SDLSurface;
 
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 public class BorealisActivity extends SDLActivity {
     private static final String TAG = "BorealisActivity";
     private static final float DEFAULT_SURFACE_FRAME_RATE = 60.0f;
     private static final int FOLDER_DIALOG_REQUEST_CODE = 0x4253;
     private static final int MANAGE_STORAGE_REQUEST_CODE = 0x4254;
+    private static final int EXPORT_DIALOG_REQUEST_CODE = 0x4255;
     private static final String EXTERNAL_STORAGE_AUTHORITY =
         "com.android.externalstorage.documents";
 
     private long folderDialogUserdata = 0;
     private boolean folderDialogRequiresRealPath = false;
     private boolean awaitingManageStoragePermission = false;
+    private long exportDialogUserdata = 0;
 
     private static native void nativeFolderDialogResult(
+        long userdata, String path, String error);
+    private static native void nativeExportDialogResult(
         long userdata, String path, String error);
 
     @Override
@@ -74,6 +82,10 @@ public class BorealisActivity extends SDLActivity {
         }
         if (requestCode == FOLDER_DIALOG_REQUEST_CODE) {
             finishFolderDialog(resultCode, data);
+            return;
+        }
+        if (requestCode == EXPORT_DIALOG_REQUEST_CODE) {
+            finishExportDialog(resultCode, data);
             return;
         }
         super.onActivityResult(requestCode, resultCode, data);
@@ -275,6 +287,56 @@ public class BorealisActivity extends SDLActivity {
         nativeFolderDialogResult(userdata, null, null);
     }
 
+    /** Called by borealis::file_select through JNI. */
+    public boolean showExportDialog(long userdata, String suggestedName, String[] filterPatterns) {
+        if (userdata == 0 || exportDialogUserdata != 0) {
+            return false;
+        }
+        exportDialogUserdata = userdata;
+        runOnUiThread(() -> {
+            Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION |
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION |
+                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            intent.putExtra(Intent.EXTRA_TITLE, suggestedName);
+            String[] mimeTypes = mimeTypesForPatterns(filterPatterns);
+            intent.setType(mimeTypes.length == 1 ? mimeTypes[0] : "*/*");
+            if (mimeTypes.length > 1) {
+                intent.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes);
+            }
+            try {
+                startActivityForResult(intent, EXPORT_DIALOG_REQUEST_CODE);
+            } catch (ActivityNotFoundException e) {
+                Log.w(TAG, "Unable to open export dialog.", e);
+                finishExportDialogWithError("Unable to open the Android export dialog");
+            }
+        });
+        return true;
+    }
+
+    private void finishExportDialog(int resultCode, Intent data) {
+        long userdata = exportDialogUserdata;
+        exportDialogUserdata = 0;
+        if (userdata == 0) {
+            return;
+        }
+        String path = resultCode == Activity.RESULT_OK && data != null && data.getData() != null
+            ? data.getData().toString()
+            : null;
+        // Copying can be large; enter native code from a Java-owned worker thread.
+        new Thread(() -> nativeExportDialogResult(userdata, path, null),
+            "Borealis file export").start();
+    }
+
+    private void finishExportDialogWithError(String error) {
+        long userdata = exportDialogUserdata;
+        exportDialogUserdata = 0;
+        if (userdata != 0) {
+            nativeExportDialogResult(userdata, null, error);
+        }
+    }
+
     private String getRealPathForUri(Uri uri) {
         if (uri == null) {
             return null;
@@ -467,6 +529,21 @@ public class BorealisActivity extends SDLActivity {
         }
     }
 
+    /** Opens a content URI and transfers ownership of its descriptor to native code. */
+    public int openUriFileDescriptor(String uriString, String mode) {
+        if (uriString == null || uriString.isEmpty() || mode == null) {
+            return -1;
+        }
+        try {
+            ParcelFileDescriptor descriptor =
+                getContentResolver().openFileDescriptor(Uri.parse(uriString), mode);
+            return descriptor != null ? descriptor.detachFd() : -1;
+        } catch (FileNotFoundException | SecurityException | IllegalArgumentException e) {
+            Log.w(TAG, "Unable to open document URI " + uriString, e);
+            return -1;
+        }
+    }
+
     /** Resolve an existing descendant. */
     public String joinDocumentUri(String folderString, String relativePath) {
         if (folderString == null || relativePath == null) {
@@ -488,6 +565,77 @@ public class BorealisActivity extends SDLActivity {
             }
         }
         return current.toString();
+    }
+
+    /** Creates one document in a selected tree and returns its provider-authoritative URI. */
+    public String createDocumentUri(String folderString, String displayName) {
+        if (folderString == null || displayName == null || displayName.isEmpty()) {
+            return null;
+        }
+        Uri treeUri = Uri.parse(folderString);
+        if (!"content".equals(treeUri.getScheme()) || !isTreeDocumentUri(treeUri)) {
+            return null;
+        }
+        try {
+            Uri child = DocumentsContract.createDocument(getContentResolver(),
+                documentUriFor(treeUri), mimeTypeForName(displayName), displayName);
+            return child != null ? child.toString() : null;
+        } catch (FileNotFoundException | SecurityException | IllegalArgumentException e) {
+            Log.w(TAG, "Unable to create document " + displayName, e);
+            return null;
+        }
+    }
+
+    /** Removes a destination that could not be fully exported. */
+    public boolean deleteDocumentUri(String uriString) {
+        if (uriString == null || uriString.isEmpty()) {
+            return false;
+        }
+        try {
+            return DocumentsContract.deleteDocument(
+                getContentResolver(), Uri.parse(uriString));
+        } catch (FileNotFoundException | SecurityException | IllegalArgumentException e) {
+            Log.w(TAG, "Unable to remove incomplete document " + uriString, e);
+            return false;
+        }
+    }
+
+    private static String mimeTypeForName(String displayName) {
+        int separator = displayName.lastIndexOf('.');
+        if (separator >= 0 && separator + 1 < displayName.length()) {
+            String extension = displayName.substring(separator + 1).toLowerCase(Locale.ROOT);
+            String type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension);
+            if (type != null && !type.isEmpty()) {
+                return type;
+            }
+        }
+        return "application/octet-stream";
+    }
+
+    private static String[] mimeTypesForPatterns(String[] patterns) {
+        ArrayList<String> result = new ArrayList<>();
+        if (patterns != null) {
+            for (String pattern : patterns) {
+                if (pattern == null) {
+                    continue;
+                }
+                for (String extension : pattern.split(";")) {
+                    String normalized = extension.trim();
+                    while (normalized.startsWith("*.")) {
+                        normalized = normalized.substring(2);
+                    }
+                    while (normalized.startsWith(".")) {
+                        normalized = normalized.substring(1);
+                    }
+                    String type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(
+                        normalized.toLowerCase(Locale.ROOT));
+                    if (type != null && !result.contains(type)) {
+                        result.add(type);
+                    }
+                }
+            }
+        }
+        return result.toArray(new String[0]);
     }
 
     /** Returns flat name, URI, directory triples for JNI. */

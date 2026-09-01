@@ -89,6 +89,10 @@ bool safe_relative_path(std::string_view path) {
     return true;
 }
 
+bool safe_child_name(std::string_view name) {
+    return safe_relative_path(name) && name.find_first_of("/\\") == std::string_view::npos;
+}
+
 std::string fallback_display_name(std::string_view location) {
     while (location.size() > 1 && (location.back() == '/' || location.back() == '\\')) {
         location.remove_suffix(1);
@@ -244,6 +248,16 @@ OpenResult open(std::string_view location, File::Mode mode) {
 #endif
     }
 
+#if defined(__ANDROID__) || defined(ANDROID)
+    if (mode != File::Mode::Read && resolved.starts_with("content://")) {
+        auto native = detail::android_open_write(resolved, mode);
+        if (native.status != Status::Ok) {
+            detail::release_access(access);
+            return failed_open(native.status, std::move(native.message));
+        }
+        return {.status = Status::Ok, .file = File{native.handle, access}};
+    }
+#endif
     if (mode != File::Mode::Read && has_scheme(resolved)) {
         detail::release_access(access);
         return failed_open(Status::Unsupported, "Write mode requires a filesystem path");
@@ -328,6 +342,61 @@ JoinResult join(std::string_view folder, std::string_view relativePath) {
     const Status status = filesystem_check(location);
     return status == Status::Ok ? JoinResult{.status = Status::Ok, .location = location} :
                                   JoinResult{.status = status, .message = "Child does not exist"};
+}
+
+JoinResult create_child(std::string_view folder, std::string_view name) {
+    if (folder.empty()) {
+        return {.status = Status::Failed, .message = "Folder location is empty"};
+    }
+    if (!detail::safe_child_name(name)) {
+        return {.status = Status::Failed, .message = "Child name must be a safe file name"};
+    }
+
+    const JoinResult existing = join(folder, name);
+    if (existing.status == Status::Ok) {
+        return {.status = Status::AlreadyExists, .message = "Child already exists"};
+    }
+    if (existing.status != Status::NotFound) {
+        return existing;
+    }
+
+    if (folder.starts_with("bookmark://")) {
+#if defined(__APPLE__) && TARGET_OS_IOS && !TARGET_OS_TV && !TARGET_OS_MACCATALYST
+        return detail::apple_bookmark_create_child(folder, name);
+#else
+        return {.status = Status::Unsupported, .message = "Bookmarks are not supported"};
+#endif
+    }
+#if defined(__ANDROID__) || defined(ANDROID)
+    if (folder.starts_with("content://")) {
+        return detail::android_create_child(folder, name);
+    }
+#endif
+    if (has_scheme(folder)) {
+        return {.status = Status::Unsupported, .message = "Folder scheme is not supported"};
+    }
+
+    const auto child = fs_path_from_utf8(folder) / fs_path_from_utf8(name);
+    const std::string location = fs_path_to_string(child);
+    SDL_ClearError();
+    SDL_IOStream* handle = SDL_IOFromFile(location.c_str(), "wbx");
+    if (handle == nullptr) {
+        if (filesystem_check(location) == Status::Ok) {
+            return {.status = Status::AlreadyExists, .message = "Child already exists"};
+        }
+        const char* error = SDL_GetError();
+        return {.status = Status::Failed,
+            .message = error != nullptr && error[0] != '\0' ? error : "Unable to create child"};
+    }
+    if (!SDL_CloseIO(handle)) {
+        const char* error = SDL_GetError();
+        const std::string message =
+            error != nullptr && error[0] != '\0' ? error : "Unable to close child";
+        std::error_code ignored;
+        std::filesystem::remove(child, ignored);
+        return {.status = Status::Failed, .message = message};
+    }
+    return {.status = Status::Ok, .location = location};
 }
 
 ListResult list(std::string_view folder) {

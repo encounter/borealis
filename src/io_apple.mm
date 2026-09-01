@@ -179,6 +179,49 @@ JoinResult apple_bookmark_join(std::string_view folder, std::string_view relativ
                               JoinResult{.status = Status::Ok, .location = bookmark};
 }
 
+JoinResult apple_bookmark_create_child(std::string_view folder, std::string_view name) {
+    auto resolved = resolve_apple_bookmark(folder, true);
+    if (resolved.status != Status::Ok) {
+        return {.status = resolved.status, .message = std::move(resolved.message)};
+    }
+    NSString* base = [NSString stringWithUTF8String:resolved.path.c_str()];
+    NSString* childName = [[NSString alloc] initWithBytes:name.data()
+                                                   length:name.size()
+                                                 encoding:NSUTF8StringEncoding];
+    if (base == nil || childName == nil) {
+        release_access(resolved.access);
+        return {.status = Status::Failed, .message = "Child name is not valid UTF-8"};
+    }
+    NSURL* child = [[NSURL fileURLWithPath:base] URLByAppendingPathComponent:childName];
+    NSFileManager* manager = [NSFileManager defaultManager];
+    if ([manager fileExistsAtPath:child.path]) {
+        release_access(resolved.access);
+        return {.status = Status::AlreadyExists, .message = "Child already exists"};
+    }
+
+    NSError* createError = nil;
+    if (![[NSData data] writeToURL:child
+                           options:NSDataWritingWithoutOverwriting
+                             error:&createError])
+    {
+        const bool exists = [manager fileExistsAtPath:child.path];
+        release_access(resolved.access);
+        return exists ? JoinResult{.status = Status::AlreadyExists,
+                            .message = "Child already exists"} :
+                        JoinResult{.status = Status::Failed,
+                            .message = ns_error(createError, "Unable to create child")};
+    }
+
+    std::string error;
+    const std::string bookmark = bookmark_for_url(child, error);
+    if (bookmark.empty()) {
+        [manager removeItemAtURL:child error:nil];
+    }
+    release_access(resolved.access);
+    return bookmark.empty() ? JoinResult{.status = Status::Failed, .message = std::move(error)} :
+                              JoinResult{.status = Status::Ok, .location = bookmark};
+}
+
 ListResult apple_bookmark_list(std::string_view folder) {
     auto resolved = resolve_apple_bookmark(folder, true);
     if (resolved.status != Status::Ok) {

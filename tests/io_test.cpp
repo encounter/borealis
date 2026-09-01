@@ -5,6 +5,7 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <span>
 #include <string>
 
 namespace {
@@ -60,6 +61,44 @@ TEST_F(IOTest, ChecksListsAndJoins) {
     EXPECT_TRUE(listed.entries[0].isDirectory);
     EXPECT_EQ(listed.entries[1].name, "sample.txt");
     EXPECT_FALSE(listed.entries[1].isDirectory);
+}
+
+TEST_F(IOTest, WritesTruncatesAndAppends) {
+    const auto location = borealis::io::fs_path_to_string(directory / "sample.txt");
+    auto writer = borealis::io::open(location, borealis::io::File::Mode::Truncate);
+    ASSERT_EQ(writer.status, borealis::io::Status::Ok) << writer.message;
+    const std::string first = "first";
+    EXPECT_TRUE(writer.file.write(std::as_bytes(std::span{first})));
+    EXPECT_TRUE(writer.file.flush());
+    EXPECT_TRUE(writer.file.close());
+
+    writer = borealis::io::open(location, borealis::io::File::Mode::Append);
+    ASSERT_EQ(writer.status, borealis::io::Status::Ok) << writer.message;
+    const std::string second = "+second";
+    EXPECT_TRUE(writer.file.write(std::as_bytes(std::span{second})));
+    EXPECT_TRUE(writer.file.close());
+
+    std::ifstream input{directory / "sample.txt", std::ios::binary};
+    const std::string contents{
+        std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    EXPECT_EQ(contents, "first+second");
+
+    auto reader = borealis::io::open(location);
+    ASSERT_EQ(reader.status, borealis::io::Status::Ok) << reader.message;
+    EXPECT_FALSE(reader.file.write(std::as_bytes(std::span{first})));
+}
+
+TEST_F(IOTest, CreatesOneSafeChildWithoutReplacing) {
+    const auto folder = borealis::io::fs_path_to_string(directory);
+    const auto created = borealis::io::create_child(folder, "created.txt");
+    ASSERT_EQ(created.status, borealis::io::Status::Ok) << created.message;
+    EXPECT_EQ(borealis::io::check(created.location), borealis::io::Status::Ok);
+    EXPECT_EQ(borealis::io::create_child(folder, "created.txt").status,
+        borealis::io::Status::AlreadyExists);
+    EXPECT_EQ(borealis::io::create_child(folder, "nested/created.txt").status,
+        borealis::io::Status::Failed);
+    EXPECT_EQ(
+        borealis::io::create_child(folder, "../created.txt").status, borealis::io::Status::Failed);
 }
 
 }  // namespace
