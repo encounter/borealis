@@ -80,8 +80,8 @@ inline constexpr borealis::AppInfo AppInfo{
 ### HTTP and update checks
 
 `borealis::http` provides pollable asynchronous HTTPS requests using WinHTTP on Windows, NSURLSession on Apple, libcurl
-on Linux or JNI on Android. Call `http::initialize()` after startup and `http::shutdown()` before shutdown. The worker
-pool grows on demand and releases idle threads automatically.
+on Linux or OkHttp on Android. Call `http::initialize()` after startup and `http::shutdown()` before shutdown. The
+worker pool grows on demand and releases idle threads automatically.
 
 Asynchronous operations return a `Task<T>`. Poll with `ready()` or `try_take()`, request cancellation with `cancel()`
 and use `map()` to transform results.
