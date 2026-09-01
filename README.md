@@ -17,7 +17,7 @@ Supported platforms: Windows, Linux, Android, macOS, iOS and tvOS.
 | `borealis::disc`         | Disc inspection and hash verification                                   | ✅       |
 | `borealis::discord`      | Discord rich presence IPC client                                        | ✅       |
 | `borealis::file_select`  | Cross-platform file/folder selection                                    | ✅       |
-| `borealis::http`         | Asynchronous HTTP client                                                | ✅       |
+| `borealis::http`         | Asynchronous HTTPS client (HTTP/2, TLS 1.2+)                            | ✅       |
 | `borealis::io`           | File I/O + paths, bookmarks (iOS), and document URIs (Android)          | ✅       |
 | `borealis::log`          | fmt-based logging + sinks (console, rotating file, logcat, ring buffer) | ✅       |
 | `borealis::presentation` | Android frame-rate configuration                                        | ✅       |
