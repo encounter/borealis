@@ -245,7 +245,7 @@ detail::TransportResult detail::send_request(const TransportRequest& request) {
     }
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers.list);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
+    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 20L);
     curl_easy_setopt(
         curl, CURLOPT_CONNECTTIMEOUT_MS, timeout_ms(request.deadline->connect_timeout()));
     curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);

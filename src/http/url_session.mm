@@ -75,11 +75,11 @@ std::vector<borealis::http::Header> to_headers(NSHTTPURLResponse* response) {
              completionHandler:(void (^)(NSURLRequest*))completionHandler {
     ++self.redirectCount;
     const BOOL isHttps = [[request.URL.scheme lowercaseString] isEqualToString:@"https"];
-    if (self.redirectCount <= 5 && isHttps) {
+    if (self.redirectCount <= 20 && isHttps) {
         completionHandler(request);
     } else {
         self.redirectDowngrade = !isHttps;
-        self.tooManyRedirects = self.redirectCount > 5;
+        self.tooManyRedirects = self.redirectCount > 20;
         completionHandler(nil);
     }
 }

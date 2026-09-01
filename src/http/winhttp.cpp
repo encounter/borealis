@@ -480,7 +480,7 @@ detail::TransportResult detail::send_request(const TransportRequest& request) {
     DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;
     WinHttpSetOption(
         httpRequest, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
-    DWORD maxRedirects = 5;
+    DWORD maxRedirects = 20;
     WinHttpSetOption(httpRequest, WINHTTP_OPTION_MAX_HTTP_AUTOMATIC_REDIRECTS, &maxRedirects,
         sizeof(maxRedirects));
 

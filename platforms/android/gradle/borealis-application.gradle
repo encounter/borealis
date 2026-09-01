@@ -119,24 +119,25 @@ def borealisRules = new File(
     project.file(androidConfig.borealisDir), 'platforms/android/proguard-rules.pro')
 
 android {
-    namespace androidConfig.namespace
-    compileSdk androidConfig.compileSdk ?: 36
-    ndkVersion ndkVersionValue
+    namespace = androidConfig.namespace
+    compileSdk = androidConfig.compileSdk ?: 37
+    ndkVersion = ndkVersionValue
 
     defaultConfig {
-        applicationId androidConfig.applicationId
-        minSdk androidConfig.minSdk ?: nativeApiLevel
-        targetSdk androidConfig.targetSdk ?: 36
-        versionCode versionCodeValue
-        versionName versionNameValue
+        applicationId = androidConfig.applicationId
+        minSdk = androidConfig.minSdk ?: nativeApiLevel
+        targetSdk = androidConfig.targetSdk ?: 36
+        versionCode = versionCodeValue
+        versionName = versionNameValue
     }
 
     buildTypes {
         debug {
-            minifyEnabled false
+            minifyEnabled = false
         }
         release {
-            minifyEnabled false
+            minifyEnabled = true
+            shrinkResources = true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
                 borealisRules,
                 project.file(androidConfig.proguardRules ?: 'proguard-rules.pro')
@@ -161,16 +162,20 @@ android {
 
     splits {
         abi {
-            enable true
+            enable = true
             reset()
             androidAbis.each { value -> include value }
-            universalApk false
+            universalApk = false
         }
     }
 
     lint {
-        abortOnError false
+        abortOnError = false
     }
+}
+
+dependencies {
+    implementation 'com.squareup.okhttp3:okhttp:5.5.0'
 }
 
 tasks.named('preBuild').configure {
