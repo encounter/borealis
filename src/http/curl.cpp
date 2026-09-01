@@ -233,13 +233,15 @@ detail::TransportResult detail::send_request(const TransportRequest& request) {
 
     const std::string url{request.url};
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    if (request.method == Method::Post) {
+    if (request.method == Method::Get) {
+        curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+    } else if (request.method == Method::Head) {
+        curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+    } else {
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request.body.data());
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request.body.empty() ? "" : request.body.data());
         curl_easy_setopt(
             curl, CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(request.body.size()));
-    } else {
-        curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
     }
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers.list);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);

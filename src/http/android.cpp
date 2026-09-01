@@ -211,12 +211,13 @@ detail::TransportResult detail::send_request(const TransportRequest& request) {
         };
     }
 
-    jstring method = jni::make_string(env, request.method == Method::Post ? "POST" : "GET");
+    jstring method = jni::make_string(env, detail::method_name(request.method));
     jstring url = jni::make_string(env, request.url);
     jobjectArray headerNames = make_string_array(env, request.headers, true);
     jobjectArray headerValues = make_string_array(env, request.headers, false);
-    jbyteArray body = make_byte_array(
-        env, request.method == Method::Post ? std::string_view{request.body} : std::string_view{});
+    jbyteArray body = make_byte_array(env, detail::method_has_request_body(request.method) ?
+                                               std::string_view{request.body} :
+                                               std::string_view{});
     if (method == nullptr || url == nullptr || headerNames == nullptr || headerValues == nullptr ||
         body == nullptr)
     {

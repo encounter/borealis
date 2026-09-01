@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -55,6 +56,55 @@ TEST_F(HttpTest, BackendIdentity) {
     EXPECT_NE(http::backend_name(), nullptr);
     EXPECT_GT(std::strlen(http::backend_name()), 0);
     EXPECT_EQ(http::available(), (http::backend() != http::Backend::None));
+}
+
+TEST(HttpMethods, ForwardsMethodAndRequestBody) {
+    struct MethodCase {
+        http::Method method;
+        std::string_view name;
+        bool hasRequestBody;
+    };
+    constexpr std::array cases{
+        MethodCase{http::Method::Get, "GET", false},
+        MethodCase{http::Method::Post, "POST", true},
+        MethodCase{http::Method::Head, "HEAD", false},
+    };
+    constexpr std::string_view RequestBody = "request body";
+    constexpr std::string_view ResponseBody = "response body";
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        borealis::detail::TaskSignals signals;
+        bool called = false;
+        const http::Request request{
+            .method = test.method,
+            .url = "https://example.com/endpoint",
+            .body = std::string{RequestBody},
+        };
+        const auto result = http::detail::perform(
+            request, &signals, [&](const http::detail::TransportRequest& transport) {
+                called = true;
+                EXPECT_EQ(transport.method, test.method);
+                EXPECT_EQ(http::detail::method_name(transport.method), test.name);
+                EXPECT_EQ(transport.body, test.hasRequestBody ? RequestBody : std::string_view{});
+                EXPECT_EQ(
+                    transport.observer->on_response(200,
+                        {{.name = "Content-Length", .value = std::to_string(ResponseBody.size())}}),
+                    http::detail::TransportObserver::Directive::Continue);
+                EXPECT_EQ(transport.observer->on_data(
+                              std::as_bytes(std::span{ResponseBody.data(), ResponseBody.size()})),
+                    http::detail::TransportObserver::Directive::Continue);
+                return http::detail::TransportResult{};
+            });
+        ASSERT_TRUE(called);
+        ASSERT_EQ(result.error, http::Error::None) << result.message;
+        EXPECT_EQ(result.response.statusCode, 200);
+        EXPECT_EQ(result.response.body,
+            test.method == http::Method::Head ? std::string_view{} : ResponseBody);
+        if (test.method == http::Method::Head) {
+            EXPECT_FALSE(signals.totalKnown.load(std::memory_order_acquire));
+        }
+    }
 }
 
 TEST_F(HttpTest, EmptyUrlRejected) {
@@ -243,6 +293,26 @@ TEST_F(HttpTest, LiveRangeResume) {
 
     std::error_code ignored;
     std::filesystem::remove_all(directory, ignored);
+}
+
+TEST_F(HttpTest, LiveHeadMethod) {
+    const char* url = std::getenv("BOREALIS_HTTP_METHOD_TEST_URL");
+    if (url == nullptr || *url == '\0') {
+        GTEST_SKIP() << "BOREALIS_HTTP_METHOD_TEST_URL is not set";
+    }
+
+    auto task = http::start({
+        .method = http::Method::Head,
+        .url = url,
+        .headers = {{.name = "User-Agent", .value = "borealis-http-test"}},
+        .totalTimeout = std::chrono::seconds{10},
+    });
+    const auto result = wait_for(task);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(result->error, http::Error::None) << result->message;
+    EXPECT_GE(result->response.statusCode, 200);
+    EXPECT_LT(result->response.statusCode, 300);
+    EXPECT_TRUE(result->response.body.empty());
 }
 
 TEST(HttpLifecycle, ExplicitInitialization) {

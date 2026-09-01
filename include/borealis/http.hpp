@@ -36,6 +36,7 @@ enum class Error {
 enum class Method {
     Get,
     Post,
+    Head,
 };
 
 struct Header {
@@ -49,8 +50,8 @@ struct Request {
     std::vector<Header> headers;
     std::string body;
     /**
-     * File managed by the caller. Preserved on failure or cancellation. A non-empty
-     * file will attempt to automatically resume if existing metadata is available.
+     * File managed by the caller. Preserved on failure or cancellation. A non-empty file
+     * used by a GET request attempts to resume if existing metadata is available.
      */
     std::filesystem::path downloadTo;
     std::chrono::milliseconds connectTimeout{10000};

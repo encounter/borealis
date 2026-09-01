@@ -461,7 +461,8 @@ detail::TransportResult detail::send_request(const TransportRequest& request) {
         return fail_from_last_error("Failed to connect");
     }
 
-    const size_t bodySize = request.method == Method::Post ? request.body.size() : 0;
+    const size_t bodySize =
+        detail::method_has_request_body(request.method) ? request.body.size() : 0;
     if (bodySize > std::numeric_limits<DWORD>::max()) {
         return {
             .error = Error::TooLarge,
@@ -469,8 +470,8 @@ detail::TransportResult detail::send_request(const TransportRequest& request) {
         };
     }
 
-    const wchar_t* method = request.method == Method::Post ? L"POST" : L"GET";
-    WinHttpHandle httpRequest{WinHttpOpenRequest(connection, method, path.c_str(), nullptr,
+    const std::wstring method = utf8_to_wide(detail::method_name(request.method));
+    WinHttpHandle httpRequest{WinHttpOpenRequest(connection, method.c_str(), path.c_str(), nullptr,
         WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE)};
     if (httpRequest.handle == nullptr) {
         return fail_from_last_error("Failed to create request");

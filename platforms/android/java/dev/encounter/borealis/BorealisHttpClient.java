@@ -52,7 +52,7 @@ public final class BorealisHttpClient {
                 return fail(ERROR_UNSUPPORTED_SCHEME, "Only https:// URLs are supported");
             }
 
-            String currentMethod = "POST".equals(method) ? "POST" : "GET";
+            String currentMethod = method;
             byte[] currentBody = requestBody != null ? requestBody : new byte[0];
             for (int redirect = 0; redirect <= MAX_REDIRECTS; ++redirect) {
                 if (isCanceled(signalsAddress)) {
@@ -69,7 +69,7 @@ public final class BorealisHttpClient {
                     connection.setUseCaches(false);
                     connection.setInstanceFollowRedirects(false);
                     applyHeaders(connection, headerNames, headerValues);
-                    if ("POST".equals(currentMethod)) {
+                    if (methodHasRequestBody(currentMethod)) {
                         writeRequestBody(connection, currentBody, signalsAddress, startTimeNs,
                                 totalTimeoutMs);
                     }
@@ -88,7 +88,11 @@ public final class BorealisHttpClient {
                             return fail(ERROR_UNSUPPORTED_SCHEME,
                                     "Only https:// redirects are supported");
                         }
-                        if (statusCode != 307 && statusCode != 308) {
+                        if ((statusCode == HttpURLConnection.HTTP_SEE_OTHER &&
+                                !"HEAD".equals(currentMethod)) ||
+                                ((statusCode == HttpURLConnection.HTTP_MOVED_PERM ||
+                                  statusCode == HttpURLConnection.HTTP_MOVED_TEMP) &&
+                                 "POST".equals(currentMethod))) {
                             currentMethod = "GET";
                             currentBody = new byte[0];
                         }
@@ -207,6 +211,10 @@ public final class BorealisHttpClient {
 
     private static boolean isHttps(URL url) {
         return "https".equalsIgnoreCase(url.getProtocol());
+    }
+
+    private static boolean methodHasRequestBody(String method) {
+        return "POST".equals(method);
     }
 
     private static boolean isRedirect(int statusCode) {

@@ -497,7 +497,8 @@ bool Deadline::expired(const Tracker& tracker) const noexcept {
 ResponseEngine::ResponseEngine(const Request& request, const DownloadPlan& downloadPlan,
     bool allowResume, borealis::detail::TaskSignals* signals)
     : m_downloadPlan{downloadPlan}, m_maxBodyBytes{request.maxBodyBytes},
-      m_allowResume{allowResume}, m_signals{signals} {}
+      m_allowResume{allowResume}, m_ignoreResponseBody{request.method == Method::Head},
+      m_signals{signals} {}
 
 void ResponseEngine::fail(Error error, std::string message) {
     if (m_error != Error::None) {
@@ -581,7 +582,7 @@ TransportObserver::Directive ResponseEngine::on_response(int status, std::vector
 
         if (m_downloadPlan.destination.empty()) {
             m_signals->completed.store(0, std::memory_order_relaxed);
-            if (const auto total = content_length(m_response);
+            if (const auto total = m_ignoreResponseBody ? std::nullopt : content_length(m_response);
                 total && identity_encoded(m_response))
             {
                 m_signals->total.store(*total, std::memory_order_relaxed);
@@ -625,6 +626,9 @@ TransportObserver::Directive ResponseEngine::on_data(std::span<const std::byte> 
         }
         if (m_restart || m_alreadyComplete || m_error != Error::None) {
             return Directive::Abort;
+        }
+        if (m_ignoreResponseBody) {
+            return Directive::Continue;
         }
 
         if (!m_downloadPlan.destination.empty()) {
@@ -735,8 +739,8 @@ Result perform(
             transportResult = transport({
                 .method = request.method,
                 .url = request.url,
-                .body = request.method == Method::Post ? std::string_view{request.body} :
-                                                         std::string_view{},
+                .body = method_has_request_body(request.method) ? std::string_view{request.body} :
+                                                                  std::string_view{},
                 .headers = request_headers(request, downloadPlan, allowResume),
                 .allowCompression = request.downloadTo.empty(),
                 .deadline = &deadline,

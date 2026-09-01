@@ -17,6 +17,22 @@
 
 namespace borealis::http::detail {
 
+constexpr std::string_view method_name(Method method) noexcept {
+    switch (method) {
+    case Method::Get:
+        return "GET";
+    case Method::Post:
+        return "POST";
+    case Method::Head:
+        return "HEAD";
+    }
+    return {};
+}
+
+constexpr bool method_has_request_body(Method method) noexcept {
+    return method == Method::Post;
+}
+
 class Deadline {
 public:
     using Clock = std::chrono::steady_clock;
@@ -134,6 +150,7 @@ private:
     const DownloadPlan& m_downloadPlan;
     size_t m_maxBodyBytes;
     bool m_allowResume;
+    bool m_ignoreResponseBody;
     borealis::detail::TaskSignals* m_signals;
     Response m_response;
     DownloadDecision m_downloadDecision;

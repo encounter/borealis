@@ -252,9 +252,9 @@ detail::TransportResult detail::send_request(const TransportRequest& request) {
         }
 
         NSMutableURLRequest* urlRequest = [NSMutableURLRequest requestWithURL:url];
-        urlRequest.HTTPMethod = request.method == Method::Post ? @"POST" : @"GET";
+        urlRequest.HTTPMethod = to_nsstring(detail::method_name(request.method));
         urlRequest.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
-        if (request.method == Method::Post && !request.body.empty()) {
+        if (detail::method_has_request_body(request.method) && !request.body.empty()) {
             urlRequest.HTTPBody = [NSData dataWithBytes:request.body.data()
                                                length:request.body.size()];
         }
