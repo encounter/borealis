@@ -18,6 +18,7 @@ Supported platforms: Windows, Linux, Android, macOS, iOS and tvOS.
 | `borealis::discord`      | Discord rich presence IPC client                                        | ✅       |
 | `borealis::file_select`  | Cross-platform file/folder selection                                    | ✅       |
 | `borealis::http`         | Asynchronous HTTP client                                                | ✅       |
+| `borealis::io`           | File I/O + paths, bookmarks (iOS), and document URIs (Android)          | ✅       |
 | `borealis::log`          | fmt-based logging + sinks (console, rotating file, logcat, ring buffer) | ✅       |
 | `borealis::presentation` | Android frame-rate configuration                                        | ✅       |
 | `borealis::sentry`       | Optional sentry-native/crashpad integration and consent state           | ✅       |

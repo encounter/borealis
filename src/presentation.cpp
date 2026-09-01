@@ -3,25 +3,12 @@
 #include <cmath>
 
 #if defined(__ANDROID__)
-#include <SDL3/SDL_system.h>
+#include "jni_internal.hpp"
+
 #include <jni.h>
 #endif
 
 namespace borealis::presentation {
-
-#if defined(__ANDROID__)
-namespace {
-
-bool clear_pending_exception(JNIEnv* env) noexcept {
-    if (env == nullptr || !env->ExceptionCheck()) {
-        return false;
-    }
-    env->ExceptionClear();
-    return true;
-}
-
-}  // namespace
-#endif
 
 bool set_preferred_frame_rate(float framesPerSecond) noexcept {
     if (!std::isfinite(framesPerSecond) || framesPerSecond < 0.0f) {
@@ -29,39 +16,18 @@ bool set_preferred_frame_rate(float framesPerSecond) noexcept {
     }
 
 #if defined(__ANDROID__)
-    auto* env = static_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
-    if (env == nullptr) {
+    jni::LocalFrame frame{jni::env()};
+    if (!frame) {
         return false;
     }
-
-    jobject activity = static_cast<jobject>(SDL_GetAndroidActivity());
-    if (activity == nullptr || clear_pending_exception(env)) {
-        if (activity != nullptr) {
-            env->DeleteLocalRef(activity);
-        }
+    auto method = jni::activity_method("setPreferredSurfaceFrameRate", "(F)V");
+    if (!method) {
         return false;
     }
-
-    jclass activityClass = env->GetObjectClass(activity);
-    if (activityClass == nullptr || clear_pending_exception(env)) {
-        env->DeleteLocalRef(activity);
-        return false;
-    }
-
-    jmethodID method =
-        env->GetMethodID(activityClass, "setPreferredSurfaceFrameRate", "(F)V");
-    env->DeleteLocalRef(activityClass);
-    if (method == nullptr || clear_pending_exception(env)) {
-        env->DeleteLocalRef(activity);
-        return false;
-    }
-
     jvalue args[1]{};
     args[0].f = framesPerSecond;
-    env->CallVoidMethodA(activity, method, args);
-    const bool succeeded = !clear_pending_exception(env);
-    env->DeleteLocalRef(activity);
-    return succeeded;
+    method.env->CallVoidMethodA(method.activity, method.method, args);
+    return !jni::clear_pending_exception(method.env);
 #else
     (void)framesPerSecond;
     return false;

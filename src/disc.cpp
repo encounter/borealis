@@ -1,8 +1,8 @@
 #include "borealis/disc.hpp"
+#include "borealis/io.hpp"
 
 #include "disc_internal.hpp"
 
-#include <SDL3/SDL_error.h>
 #include <SDL3/SDL_iostream.h>
 #include <nod.h>
 #include <xxhash.h>
@@ -20,6 +20,27 @@ namespace borealis::disc::detail {
 namespace {
 
 constexpr std::size_t HashBufferSize = 1024 * 1024;
+
+class DiscStream {
+public:
+    explicit DiscStream(SDL_IOStream* stream) : mStream{stream} {}
+    explicit DiscStream(io::File file) : mFile{std::move(file)}, mStream{mFile.handle()} {}
+
+    DiscStream(const DiscStream&) = delete;
+    DiscStream& operator=(const DiscStream&) = delete;
+
+    ~DiscStream() {
+        if (!mFile && mStream != nullptr) {
+            SDL_CloseIO(mStream);
+        }
+    }
+
+    SDL_IOStream* get() const noexcept { return mStream; }
+
+private:
+    io::File mFile;
+    SDL_IOStream* mStream = nullptr;
+};
 
 std::string copy_message(const char* message, std::string fallback) {
     if (message == nullptr || message[0] == '\0') {
@@ -44,7 +65,8 @@ std::int64_t stream_read_at(
         return -1;
     }
 
-    auto* stream = static_cast<SDL_IOStream*>(userdata);
+    auto* streamOwner = static_cast<DiscStream*>(userdata);
+    SDL_IOStream* stream = streamOwner->get();
     if (SDL_SeekIO(stream, static_cast<Sint64>(offset), SDL_IO_SEEK_SET) < 0) {
         return -1;
     }
@@ -59,13 +81,11 @@ std::int64_t stream_length(void* userdata) {
     if (userdata == nullptr) {
         return -1;
     }
-    return SDL_GetIOSize(static_cast<SDL_IOStream*>(userdata));
+    return SDL_GetIOSize(static_cast<DiscStream*>(userdata)->get());
 }
 
 void stream_close(void* userdata) {
-    if (userdata != nullptr) {
-        SDL_CloseIO(static_cast<SDL_IOStream*>(userdata));
-    }
+    delete static_cast<DiscStream*>(userdata);
 }
 
 class NodHandleOwner {
@@ -140,9 +160,10 @@ bool is_recognized_game(const Metadata& metadata, Catalog catalog) noexcept {
                metadata.gameId) != catalog.recognizedGameIds.end();
 }
 
-OpenedDisc open_and_inspect(SDL_IOStream* stream, Catalog catalog, const NodApi& api) {
+OpenedDisc open_and_inspect(
+    std::unique_ptr<DiscStream> stream, Catalog catalog, const NodApi& api) {
     OpenedDisc opened{api};
-    if (stream == nullptr) {
+    if (stream == nullptr || stream->get() == nullptr) {
         opened.result = {
             .status = Status::IOError,
             .message = "Disc stream is null",
@@ -151,7 +172,7 @@ OpenedDisc open_and_inspect(SDL_IOStream* stream, Catalog catalog, const NodApi&
     }
 
     const NodDiscStream callbacks{
-        .user_data = stream,
+        .user_data = stream.release(),
         .read_at = stream_read_at,
         .stream_len = stream_length,
         .close = stream_close,
@@ -233,21 +254,21 @@ Status status_from_nod_result(NodResult result) noexcept {
 }
 
 Result inspect_stream(SDL_IOStream* stream, Catalog catalog, const NodApi& api) {
-    auto opened = open_and_inspect(stream, catalog, api);
+    auto opened = open_and_inspect(std::make_unique<DiscStream>(stream), catalog, api);
     return std::move(opened.result);
 }
 
-Result verify_stream(SDL_IOStream* stream, Catalog catalog, Progress* progress, const NodApi& api) {
+Result verify_owned_stream(std::unique_ptr<DiscStream> streamOwner, Catalog catalog,
+    Progress* progress, const NodApi& api) {
     if (progress != nullptr) {
         progress->bytesRead.store(0, std::memory_order_relaxed);
         progress->bytesTotal.store(0, std::memory_order_relaxed);
         if (progress->cancelRequested.load(std::memory_order_relaxed)) {
-            stream_close(stream);
             return canceled_result();
         }
     }
 
-    auto opened = open_and_inspect(stream, catalog, api);
+    auto opened = open_and_inspect(std::move(streamOwner), catalog, api);
     if (opened.result.status != Status::Success) {
         return std::move(opened.result);
     }
@@ -319,6 +340,20 @@ Result verify_stream(SDL_IOStream* stream, Catalog catalog, Progress* progress, 
     return std::move(opened.result);
 }
 
+Result verify_stream(SDL_IOStream* stream, Catalog catalog, Progress* progress, const NodApi& api) {
+    return verify_owned_stream(std::make_unique<DiscStream>(stream), catalog, progress, api);
+}
+
+Result inspect_file(io::File file, Catalog catalog, const NodApi& api) {
+    auto opened = open_and_inspect(std::make_unique<DiscStream>(std::move(file)), catalog, api);
+    return std::move(opened.result);
+}
+
+Result verify_file(io::File file, Catalog catalog, Progress* progress, const NodApi& api) {
+    return verify_owned_stream(
+        std::make_unique<DiscStream>(std::move(file)), catalog, progress, api);
+}
+
 }  // namespace borealis::disc::detail
 
 namespace borealis::disc {
@@ -331,29 +366,18 @@ Result open_error(std::string message) {
     };
 }
 
-SDL_IOStream* open_location(std::string_view location, Result& error) {
-    if (location.empty()) {
-        error = open_error("Disc location is empty");
-        return nullptr;
-    }
-
-    const std::string path{location};
-    SDL_IOStream* stream = SDL_IOFromFile(path.c_str(), "rb");
-    if (stream == nullptr) {
-        error = open_error(detail::copy_message(SDL_GetError(), "Failed to open disc image"));
-    }
-    return stream;
+Result open_error(const io::OpenResult& opened) {
+    return open_error(opened.message.empty() ? "Failed to open disc image" : opened.message);
 }
 
 }  // namespace
 
 Result inspect(std::string_view location, Catalog catalog) {
-    Result error;
-    SDL_IOStream* stream = open_location(location, error);
-    if (stream == nullptr) {
-        return error;
+    auto opened = io::open(location);
+    if (opened.status != io::Status::Ok) {
+        return open_error(opened);
     }
-    return detail::inspect_stream(stream, catalog, detail::default_nod_api());
+    return detail::inspect_file(std::move(opened.file), catalog, detail::default_nod_api());
 }
 
 Result verify(std::string_view location, Catalog catalog, Progress* progress) {
@@ -365,12 +389,12 @@ Result verify(std::string_view location, Catalog catalog, Progress* progress) {
         }
     }
 
-    Result error;
-    SDL_IOStream* stream = open_location(location, error);
-    if (stream == nullptr) {
-        return error;
+    auto opened = io::open(location);
+    if (opened.status != io::Status::Ok) {
+        return open_error(opened);
     }
-    return detail::verify_stream(stream, catalog, progress, detail::default_nod_api());
+    return detail::verify_file(
+        std::move(opened.file), catalog, progress, detail::default_nod_api());
 }
 
 }  // namespace borealis::disc

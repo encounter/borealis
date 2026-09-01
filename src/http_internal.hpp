@@ -1,8 +1,7 @@
 #pragma once
 
 #include "borealis/http.hpp"
-
-#include "http_io.hpp"
+#include "borealis/io.hpp"
 
 #include <atomic>
 #include <chrono>

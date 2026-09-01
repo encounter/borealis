@@ -99,7 +99,7 @@ struct Result {
     std::string message;
 };
 
-/** Synchronously inspects a disc header from a path or Android content URI. */
+/** Synchronously inspects a disc header from a borealis::io location. */
 Result inspect(std::string_view location, Catalog catalog);
 
 /**

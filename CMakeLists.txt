@@ -10,8 +10,9 @@ option(BOREALIS_ENABLE_HTTP "Build borealis::http" ON)
 option(BOREALIS_ENABLE_UPDATE "Build borealis::update (requires borealis::http and nlohmann_json)" ON)
 option(BOREALIS_ENABLE_CRASH "Build borealis::crash" ON)
 option(BOREALIS_ENABLE_DATA "Build borealis::data (requires SDL3 and nlohmann_json)" ON)
+option(BOREALIS_ENABLE_IO "Build borealis::io (requires SDL3)" ON)
 option(BOREALIS_ENABLE_FILE_SELECT "Build borealis::file_select (requires SDL3)" ON)
-option(BOREALIS_ENABLE_DISC "Build borealis::disc (requires SDL3, nod, and xxhash)" ON)
+option(BOREALIS_ENABLE_DISC "Build borealis::disc (requires borealis::io, nod, and xxhash)" ON)
 option(BOREALIS_ENABLE_SENTRY "Build borealis::sentry with sentry-native/crashpad" OFF)
 set(_borealis_discord_default ON)
 if (ANDROID OR IOS OR TVOS OR CMAKE_SYSTEM_NAME MATCHES "^(iOS|tvOS)$")
@@ -210,6 +211,21 @@ set(_borealis_json_needed OFF)
 add_library(borealis_sdl_dep INTERFACE)
 add_library(borealis_json_dep INTERFACE)
 
+if (BOREALIS_ENABLE_IO)
+    set(_borealis_sdl_needed ON)
+    add_library(borealis_io STATIC src/io.cpp)
+    add_library(borealis::io ALIAS borealis_io)
+    target_link_libraries(borealis_io PUBLIC borealis_core PRIVATE borealis_sdl_dep)
+    if (IOS OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        find_library(BOREALIS_FOUNDATION_FRAMEWORK Foundation REQUIRED)
+        target_sources(borealis_io PRIVATE src/io_apple.mm)
+        set_source_files_properties(src/io_apple.mm PROPERTIES COMPILE_FLAGS -fobjc-arc)
+        target_link_libraries(borealis_io PRIVATE ${BOREALIS_FOUNDATION_FRAMEWORK})
+    elseif (ANDROID)
+        target_sources(borealis_io PRIVATE src/io_android.cpp)
+    endif ()
+endif ()
+
 add_library(borealis_presentation STATIC src/presentation.cpp)
 add_library(borealis::presentation ALIAS borealis_presentation)
 target_link_libraries(borealis_presentation PUBLIC borealis_core)
@@ -219,6 +235,9 @@ if (ANDROID)
 endif ()
 
 if (BOREALIS_ENABLE_DISC)
+    if (NOT TARGET borealis_io)
+        message(FATAL_ERROR "borealis::disc requires borealis::io")
+    endif ()
     set(_borealis_sdl_needed ON)
     if (NOT TARGET aurora::dvd AND NOT TARGET nod::nod AND _borealis_aurora_cmake_dir)
         include("${_borealis_aurora_cmake_dir}/AuroraNodProvider.cmake")
@@ -264,7 +283,7 @@ if (BOREALIS_ENABLE_DISC)
     add_library(borealis::disc ALIAS borealis_disc)
     target_link_libraries(borealis_disc
             PUBLIC borealis_core ${_borealis_xxhash_target}
-            PRIVATE ${_borealis_nod_target} borealis_sdl_dep)
+            PRIVATE borealis_io ${_borealis_nod_target} borealis_sdl_dep)
 endif ()
 
 if (BOREALIS_ENABLE_DATA)
@@ -278,12 +297,15 @@ if (BOREALIS_ENABLE_DATA)
 endif ()
 
 if (BOREALIS_ENABLE_FILE_SELECT)
+    if (NOT TARGET borealis_io)
+        message(FATAL_ERROR "borealis::file_select requires borealis::io")
+    endif ()
     set(_borealis_sdl_needed ON)
     add_library(borealis_file_select STATIC src/file_select/file_select.cpp)
     add_library(borealis::file_select ALIAS borealis_file_select)
     target_link_libraries(borealis_file_select
             PUBLIC borealis_core
-            PRIVATE borealis_sdl_dep)
+            PRIVATE borealis_io borealis_sdl_dep)
 
     if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
         find_library(BOREALIS_APPKIT_FRAMEWORK AppKit REQUIRED)
@@ -321,6 +343,9 @@ endif ()
 add_library(borealis::discord ALIAS borealis_discord)
 
 if (BOREALIS_ENABLE_HTTP)
+    if (NOT TARGET borealis_io)
+        message(FATAL_ERROR "borealis::http requires borealis::io")
+    endif ()
     set(_borealis_json_needed ON)
     set(_borealis_http_backend "${BOREALIS_HTTP_BACKEND}")
     set(_borealis_http_explicit TRUE)
@@ -368,13 +393,12 @@ if (BOREALIS_ENABLE_HTTP)
     add_library(borealis_http STATIC
             src/http.cpp
             src/http_download.cpp
-            src/http_io.cpp
             ${_borealis_http_source}
     )
     add_library(borealis::http ALIAS borealis_http)
     target_link_libraries(borealis_http
             PUBLIC borealis_core
-            PRIVATE borealis_json_dep Threads::Threads)
+            PRIVATE borealis_io borealis_json_dep Threads::Threads)
 
     if (_borealis_http_backend STREQUAL "winhttp")
         target_link_libraries(borealis_http PRIVATE winhttp)

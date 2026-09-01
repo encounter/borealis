@@ -1,0 +1,440 @@
+#include "borealis/io.hpp"
+
+#include "io_internal.hpp"
+
+#include <SDL3/SDL_error.h>
+#include <SDL3/SDL_iostream.h>
+
+#include <algorithm>
+#include <cerrno>
+#include <limits>
+#include <string_view>
+#include <system_error>
+#include <utility>
+
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
+
+namespace borealis::io {
+namespace {
+
+bool has_scheme(std::string_view location) {
+    const auto separator = location.find("://");
+    return separator != std::string_view::npos && separator != 0;
+}
+
+#if defined(__ANDROID__) || defined(ANDROID)
+bool is_android_uri(std::string_view location) {
+    return location.starts_with("content://") || location.starts_with("file://");
+}
+#endif
+
+Status filesystem_check(std::string_view location) {
+    if (location.empty()) {
+        return Status::NotFound;
+    }
+    std::error_code error;
+    const bool exists = std::filesystem::exists(fs_path_from_utf8(location), error);
+    if (exists) {
+        return Status::Ok;
+    }
+    if (!error || error == std::errc::no_such_file_or_directory ||
+        error == std::errc::permission_denied)
+    {
+        return Status::NotFound;
+    }
+    return Status::Failed;
+}
+
+OpenResult failed_open(Status status, std::string message) {
+    return {.status = status, .message = std::move(message)};
+}
+
+std::string system_error_message(std::string_view action, int error) {
+    return std::string{action} + ": " + std::generic_category().message(error);
+}
+
+}  // namespace
+
+namespace detail {
+
+bool safe_relative_path(std::string_view path) {
+    if (path.empty() || path.front() == '/' || path.front() == '\\' ||
+        (path.size() >= 2 && path[1] == ':'))
+    {
+        return false;
+    }
+    while (!path.empty()) {
+        const auto separator = path.find_first_of("/\\");
+        const auto segment = path.substr(0, separator);
+        if (segment.empty() || segment == "." || segment == "..") {
+            return false;
+        }
+        if (separator == std::string_view::npos) {
+            break;
+        }
+        path.remove_prefix(separator + 1);
+    }
+    return true;
+}
+
+std::string fallback_display_name(std::string_view location) {
+    while (location.size() > 1 && (location.back() == '/' || location.back() == '\\')) {
+        location.remove_suffix(1);
+    }
+    const auto separator = location.find_last_of("/\\");
+    return std::string{
+        separator == std::string_view::npos ? location : location.substr(separator + 1)};
+}
+
+#if !defined(__APPLE__) || !TARGET_OS_IOS || TARGET_OS_TV || TARGET_OS_MACCATALYST
+void release_access(void*) noexcept {}
+#endif
+
+}  // namespace detail
+
+File::~File() {
+    if (m_handle != nullptr) {
+        SDL_CloseIO(m_handle);
+    }
+    detail::release_access(m_access);
+}
+
+File::File(File&& other) noexcept
+    : m_handle{std::exchange(other.m_handle, nullptr)},
+      m_access{std::exchange(other.m_access, nullptr)}, m_error{std::move(other.m_error)} {}
+
+File& File::operator=(File&& other) noexcept {
+    if (this != &other) {
+        if (m_handle != nullptr) {
+            SDL_CloseIO(m_handle);
+        }
+        detail::release_access(m_access);
+        m_handle = std::exchange(other.m_handle, nullptr);
+        m_access = std::exchange(other.m_access, nullptr);
+        m_error = std::move(other.m_error);
+    }
+    return *this;
+}
+
+void File::set_sdl_error(std::string_view action) noexcept {
+    try {
+        const char* error = SDL_GetError();
+        m_error = std::string{action} +
+                  (error != nullptr && error[0] != '\0' ? ": " + std::string{error} : " failed");
+    } catch (...) {
+        m_error = "I/O operation failed";
+    }
+}
+
+uint64_t File::size() const noexcept {
+    if (m_handle == nullptr) {
+        return 0;
+    }
+    const Sint64 value = SDL_GetIOSize(m_handle);
+    return value < 0 ? 0 : static_cast<uint64_t>(value);
+}
+
+uint64_t File::read(void* buf, uint64_t len) noexcept {
+    m_error.clear();
+    if (m_handle == nullptr || (buf == nullptr && len != 0)) {
+        m_error = "File is not open";
+        return 0;
+    }
+    const size_t request =
+        static_cast<size_t>(std::min<uint64_t>(len, std::numeric_limits<size_t>::max()));
+    const size_t read = SDL_ReadIO(m_handle, buf, request);
+    if (read < request && SDL_GetIOStatus(m_handle) == SDL_IO_STATUS_ERROR) {
+        set_sdl_error("Failed to read file");
+    }
+    return read;
+}
+
+bool File::seek(uint64_t offset) noexcept {
+    m_error.clear();
+    if (m_handle == nullptr || offset > static_cast<uint64_t>(std::numeric_limits<Sint64>::max())) {
+        m_error = m_handle == nullptr ? "File is not open" : "File offset is too large";
+        return false;
+    }
+    if (SDL_SeekIO(m_handle, static_cast<Sint64>(offset), SDL_IO_SEEK_SET) < 0) {
+        set_sdl_error("Failed to seek file");
+        return false;
+    }
+    return true;
+}
+
+bool File::write(std::span<const std::byte> bytes) noexcept {
+    m_error.clear();
+    if (bytes.empty()) {
+        return true;
+    }
+    if (m_handle == nullptr) {
+        m_error = "File is not open";
+        return false;
+    }
+    if (SDL_WriteIO(m_handle, bytes.data(), bytes.size()) != bytes.size()) {
+        set_sdl_error("Failed to write file");
+        return false;
+    }
+    return true;
+}
+
+bool File::flush() noexcept {
+    m_error.clear();
+    if (m_handle == nullptr) {
+        return true;
+    }
+    if (!SDL_FlushIO(m_handle)) {
+        set_sdl_error("Failed to flush file");
+        return false;
+    }
+    return true;
+}
+
+bool File::close() noexcept {
+    if (m_handle == nullptr) {
+        return true;
+    }
+    bool success = flush();
+    SDL_IOStream* handle = std::exchange(m_handle, nullptr);
+    if (!SDL_CloseIO(handle) && success) {
+        set_sdl_error("Failed to close file");
+        success = false;
+    }
+    detail::release_access(std::exchange(m_access, nullptr));
+    return success;
+}
+
+OpenResult open(std::string_view location, File::Mode mode) {
+    if (location.empty()) {
+        return failed_open(Status::NotFound, "Location is empty");
+    }
+
+    std::string resolved{location};
+    void* access = nullptr;
+    if (location.starts_with("bookmark://")) {
+#if defined(__APPLE__) && TARGET_OS_IOS && !TARGET_OS_TV && !TARGET_OS_MACCATALYST
+        auto bookmark = detail::resolve_apple_bookmark(location, true);
+        if (bookmark.status != Status::Ok) {
+            return failed_open(bookmark.status, std::move(bookmark.message));
+        }
+        resolved = std::move(bookmark.path);
+        access = bookmark.access;
+#else
+        return failed_open(Status::Unsupported, "Bookmarks are not supported on this platform");
+#endif
+    } else if (has_scheme(location)) {
+#if defined(__ANDROID__) || defined(ANDROID)
+        if (!is_android_uri(location)) {
+            return failed_open(Status::Unsupported, "Location scheme is not supported");
+        }
+#else
+        return failed_open(Status::Unsupported, "Location scheme is not supported");
+#endif
+    }
+
+    if (mode != File::Mode::Read && has_scheme(resolved)) {
+        detail::release_access(access);
+        return failed_open(Status::Unsupported, "Write mode requires a filesystem path");
+    }
+    const char* openMode = mode == File::Mode::Read   ? "rb" :
+                           mode == File::Mode::Append ? "ab" :
+                                                        "wb";
+    SDL_ClearError();
+    SDL_IOStream* handle = SDL_IOFromFile(resolved.c_str(), openMode);
+    if (handle == nullptr) {
+        const std::string message = SDL_GetError() != nullptr && SDL_GetError()[0] != '\0' ?
+                                        SDL_GetError() :
+                                        "Failed to open file";
+        detail::release_access(access);
+        const Status status =
+            check(location) == Status::NotFound ? Status::NotFound : Status::Failed;
+        return failed_open(status, message);
+    }
+    return {.status = Status::Ok, .file = File{handle, access}};
+}
+
+Status check(std::string_view location) {
+    if (location.starts_with("bookmark://")) {
+#if defined(__APPLE__) && TARGET_OS_IOS && !TARGET_OS_TV && !TARGET_OS_MACCATALYST
+        return detail::apple_bookmark_check(location);
+#else
+        return Status::Unsupported;
+#endif
+    }
+#if defined(__ANDROID__) || defined(ANDROID)
+    if (is_android_uri(location)) {
+        return detail::android_check(location);
+    }
+#endif
+    if (has_scheme(location)) {
+        return Status::Unsupported;
+    }
+    return filesystem_check(location);
+}
+
+std::string display_name(std::string_view location) {
+    if (location.starts_with("bookmark://")) {
+#if defined(__APPLE__) && TARGET_OS_IOS && !TARGET_OS_TV && !TARGET_OS_MACCATALYST
+        return detail::apple_bookmark_display_name(location);
+#else
+        return {};
+#endif
+    }
+#if defined(__ANDROID__) || defined(ANDROID)
+    if (is_android_uri(location)) {
+        const auto name = detail::android_display_name(location);
+        if (!name.empty()) {
+            return name;
+        }
+    }
+#endif
+    return detail::fallback_display_name(location);
+}
+
+JoinResult join(std::string_view folder, std::string_view relativePath) {
+    if (!detail::safe_relative_path(relativePath)) {
+        return {.status = Status::Failed, .message = "Child path must be a safe relative path"};
+    }
+    if (folder.starts_with("bookmark://")) {
+#if defined(__APPLE__) && TARGET_OS_IOS && !TARGET_OS_TV && !TARGET_OS_MACCATALYST
+        return detail::apple_bookmark_join(folder, relativePath);
+#else
+        return {.status = Status::Unsupported, .message = "Bookmarks are not supported"};
+#endif
+    }
+#if defined(__ANDROID__) || defined(ANDROID)
+    if (folder.starts_with("content://")) {
+        return detail::android_join(folder, relativePath);
+    }
+#endif
+    if (has_scheme(folder)) {
+        return {.status = Status::Unsupported, .message = "Folder scheme is not supported"};
+    }
+
+    const auto child = fs_path_from_utf8(folder) / fs_path_from_utf8(relativePath);
+    const std::string location = fs_path_to_string(child);
+    const Status status = filesystem_check(location);
+    return status == Status::Ok ? JoinResult{.status = Status::Ok, .location = location} :
+                                  JoinResult{.status = status, .message = "Child does not exist"};
+}
+
+ListResult list(std::string_view folder) {
+    if (folder.starts_with("bookmark://")) {
+#if defined(__APPLE__) && TARGET_OS_IOS && !TARGET_OS_TV && !TARGET_OS_MACCATALYST
+        return detail::apple_bookmark_list(folder);
+#else
+        return {.status = Status::Unsupported, .message = "Bookmarks are not supported"};
+#endif
+    }
+#if defined(__ANDROID__) || defined(ANDROID)
+    if (folder.starts_with("content://")) {
+        return detail::android_list(folder);
+    }
+#endif
+    if (has_scheme(folder)) {
+        return {.status = Status::Unsupported, .message = "Folder scheme is not supported"};
+    }
+
+    std::error_code error;
+    std::filesystem::directory_iterator iterator{fs_path_from_utf8(folder), error};
+    if (error) {
+        return {
+            .status =
+                error == std::errc::no_such_file_or_directory ? Status::NotFound : Status::Failed,
+            .message = error.message(),
+        };
+    }
+    ListResult result{.status = Status::Ok};
+    const std::filesystem::directory_iterator end;
+    while (iterator != end) {
+        const auto& item = *iterator;
+        std::error_code typeError;
+        const bool isDirectory = item.is_directory(typeError);
+        if (typeError) {
+            return {
+                .status = Status::Failed,
+                .message = typeError.message(),
+            };
+        }
+        result.entries.push_back({
+            .name = fs_path_to_string(item.path().filename()),
+            .location = fs_path_to_string(item.path()),
+            .isDirectory = isDirectory,
+        });
+        iterator.increment(error);
+        if (error) {
+            return {.status = Status::Failed, .message = error.message()};
+        }
+    }
+    std::ranges::sort(result.entries, {}, &Entry::name);
+    return result;
+}
+
+PathAccess::~PathAccess() {
+    detail::release_access(m_access);
+}
+
+PathAccess::PathAccess(PathAccess&& other) noexcept
+    : m_path{std::move(other.m_path)}, m_access{std::exchange(other.m_access, nullptr)} {
+    other.m_path.clear();
+}
+
+PathAccess& PathAccess::operator=(PathAccess&& other) noexcept {
+    if (this != &other) {
+        detail::release_access(m_access);
+        m_path = std::move(other.m_path);
+        m_access = std::exchange(other.m_access, nullptr);
+        other.m_path.clear();
+    }
+    return *this;
+}
+
+PathAccess access_path(std::string_view location) {
+    if (location.starts_with("bookmark://")) {
+#if defined(__APPLE__) && TARGET_OS_IOS && !TARGET_OS_TV && !TARGET_OS_MACCATALYST
+        auto resolved = detail::resolve_apple_bookmark(location, true);
+        if (resolved.status == Status::Ok) {
+            return {fs_path_from_utf8(resolved.path), resolved.access};
+        }
+#endif
+        return {};
+    }
+    if (location.empty() || has_scheme(location)) {
+        return {};
+    }
+    return {fs_path_from_utf8(location), nullptr};
+}
+
+bool atomic_replace(const std::filesystem::path& source, const std::filesystem::path& destination,
+    std::string& error) {
+#ifdef _WIN32
+    if (MoveFileExW(source.c_str(), destination.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == FALSE)
+    {
+        error = "Failed to replace file: " +
+                std::system_category().message(static_cast<int>(GetLastError()));
+        return false;
+    }
+#else
+    errno = 0;
+    if (rename(source.c_str(), destination.c_str()) != 0) {
+        error = system_error_message("Failed to replace file", errno);
+        return false;
+    }
+#endif
+    return true;
+}
+
+}  // namespace borealis::io

@@ -1,11 +1,14 @@
 #include "borealis/file_select.hpp"
 
+#include "borealis/io.hpp"
+
 #include "file_select_internal.hpp"
 
 #include <SDL3/SDL_dialog.h>
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_init.h>
 
+#include <atomic>
 #include <memory>
 #include <utility>
 
@@ -34,6 +37,8 @@ struct CompletionState {
     Result result;
 };
 
+std::atomic_bool g_dialogBusy = false;
+
 void invoke_completion(void* userdata) {
     std::unique_ptr<CompletionState> state{static_cast<CompletionState*>(userdata)};
     state->callback(std::move(state->result));
@@ -41,7 +46,7 @@ void invoke_completion(void* userdata) {
 
 }  // namespace
 
-void complete(Callback callback, Result result) {
+void dispatch_completion(Callback callback, Result result) {
     if (!callback) {
         return;
     }
@@ -55,6 +60,20 @@ void complete(Callback callback, Result result) {
 
     // Run inline if SDL cannot queue the callback.
     invoke_completion(state.release());
+}
+
+void complete(Callback callback, Result result) {
+    g_dialogBusy.store(false, std::memory_order_release);
+    dispatch_completion(std::move(callback), std::move(result));
+}
+
+void reject(Callback callback, Result result) {
+    dispatch_completion(std::move(callback), std::move(result));
+}
+
+bool acquire_dialog() {
+    bool expected = false;
+    return g_dialogBusy.compare_exchange_strong(expected, true, std::memory_order_acq_rel);
 }
 
 Result result_from_file_list(const char* const* fileList, const char* error) {
@@ -73,22 +92,6 @@ Result result_from_file_list(const char* const* fileList, const char* error) {
         result.locations.emplace_back(*location);
     }
     return result;
-}
-
-std::string fallback_display_name(std::string_view location) {
-    if (location.empty()) {
-        return {};
-    }
-
-    while (location.size() > 1 && (location.back() == '/' || location.back() == '\\')) {
-        location.remove_suffix(1);
-    }
-
-    const auto separator = location.find_last_of("/\\");
-    if (separator == std::string_view::npos || separator + 1 >= location.size()) {
-        return std::string{location};
-    }
-    return std::string{location.substr(separator + 1)};
 }
 
 namespace {
@@ -120,7 +123,7 @@ std::unique_ptr<SDLDialogState> make_sdl_state(
 }
 
 void fail_wrong_thread(Callback callback) {
-    complete(
+    reject(
         std::move(callback), {
                                  .status = Status::Failed,
                                  .message = "File selection must be started on SDL's main thread",
@@ -134,10 +137,14 @@ Capabilities capabilities() noexcept {
 #if defined(__APPLE__) && TARGET_OS_TV
     return {};
 #elif BOREALIS_USE_IOS_FILE_DIALOG
-    return {.canOpenFile = true, .canOpenFolder = false};
+    return {.canOpenFile = true, .canOpenFolder = true};
 #else
     return {.canOpenFile = true, .canOpenFolder = true};
 #endif
+}
+
+bool busy() noexcept {
+    return detail::g_dialogBusy.load(std::memory_order_acquire);
 }
 
 void open_file(FileOptions options, Callback callback) {
@@ -149,11 +156,18 @@ void open_file(FileOptions options, Callback callback) {
         return;
     }
     if (!capabilities().canOpenFile) {
-        detail::complete(
+        detail::reject(
             std::move(callback), {
                                      .status = Status::Unsupported,
                                      .message = "File selection is not supported on this platform",
                                  });
+        return;
+    }
+    if (!detail::acquire_dialog()) {
+        detail::reject(std::move(callback), {
+                                                .status = Status::Busy,
+                                                .message = "Another file dialog is already open",
+                                            });
         return;
     }
 
@@ -180,15 +194,24 @@ void open_folder(FolderOptions options, Callback callback) {
         return;
     }
     if (!capabilities().canOpenFolder) {
-        detail::complete(std::move(callback),
+        detail::reject(std::move(callback),
             {
                 .status = Status::Unsupported,
                 .message = "Folder selection is not supported on this platform",
             });
         return;
     }
+    if (!detail::acquire_dialog()) {
+        detail::reject(std::move(callback), {
+                                                .status = Status::Busy,
+                                                .message = "Another file dialog is already open",
+                                            });
+        return;
+    }
 
-#if BOREALIS_USE_MACOS_FOLDER_DIALOG
+#if BOREALIS_USE_IOS_FILE_DIALOG
+    detail::open_ios_folder(std::move(options), std::move(callback));
+#elif BOREALIS_USE_MACOS_FOLDER_DIALOG
     detail::open_macos_folder(std::move(options), std::move(callback));
 #elif defined(__ANDROID__) || defined(ANDROID)
     detail::open_android_folder(std::move(options), std::move(callback));
@@ -200,18 +223,6 @@ void open_folder(FolderOptions options, Callback callback) {
     SDL_ShowOpenFolderDialog(&detail::sdl_dialog_finished, state.release(), options.parentWindow,
         defaultLocation, false);
 #endif
-}
-
-std::string display_name(std::string_view location) {
-#if defined(__ANDROID__) || defined(ANDROID)
-    if (location.starts_with("content:") || location.starts_with("file:")) {
-        std::string name = detail::android_display_name(location);
-        if (!name.empty()) {
-            return name;
-        }
-    }
-#endif
-    return detail::fallback_display_name(location);
 }
 
 }  // namespace borealis::file_select

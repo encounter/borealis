@@ -32,6 +32,12 @@ add_executable(borealis_log_test log_test.cpp)
 target_link_libraries(borealis_log_test PRIVATE borealis::log)
 borealis_add_gtest(borealis_log_test)
 
+if (TARGET borealis_io)
+    add_executable(borealis_io_test io_test.cpp)
+    target_link_libraries(borealis_io_test PRIVATE borealis::io)
+    borealis_add_gtest(borealis_io_test)
+endif ()
+
 if (TARGET borealis_data)
     add_executable(borealis_data_test data_test.cpp)
     target_include_directories(borealis_data_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)

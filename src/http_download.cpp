@@ -224,14 +224,16 @@ bool write_metadata(const DownloadPlan& plan, const std::string& validatorName,
 
     std::filesystem::path temporary = plan.metadataPath;
     temporary += ".tmp";
-    io::File output;
-    if (!output.open(temporary, io::File::Mode::Truncate, error)) {
-        error = "Failed to create download resume metadata: " + error;
+    auto openResult =
+        borealis::io::open(io::fs_path_to_string(temporary), io::File::Mode::Truncate);
+    if (openResult.status != io::Status::Ok) {
+        error = "Failed to create download resume metadata: " + openResult.message;
         return false;
     }
+    auto output = std::move(openResult.file);
     const std::string encoded = metadata.dump(2) + '\n';
-    if (!output.write(as_bytes(encoded), error) || !output.close(error)) {
-        error = "Failed to write download resume metadata: " + error;
+    if (!output.write(as_bytes(encoded)) || !output.close()) {
+        error = "Failed to write download resume metadata: " + output.error();
         std::error_code ignored;
         std::filesystem::remove(temporary, ignored);
         return false;
@@ -526,13 +528,15 @@ bool ResponseEngine::prepare_sink() {
     }
 
     std::string ioError;
-    const io::File::Mode mode = m_downloadDecision.action == DownloadAction::Append ?
-                                    io::File::Mode::Append :
-                                    io::File::Mode::Truncate;
-    if (!m_output.open(m_downloadPlan.destination, mode, ioError)) {
-        m_message = "Failed to open download destination: " + ioError;
+    const auto mode = m_downloadDecision.action == DownloadAction::Append ?
+                          io::File::Mode::Append :
+                          io::File::Mode::Truncate;
+    auto openResult = borealis::io::open(io::fs_path_to_string(m_downloadPlan.destination), mode);
+    if (openResult.status != io::Status::Ok) {
+        m_message = "Failed to open download destination: " + openResult.message;
         return false;
     }
+    m_output = std::move(openResult.file);
 
     if (m_downloadPlan.managed) {
         const bool resumableStatus = m_response.statusCode == 200 || m_response.statusCode == 206;
@@ -548,17 +552,17 @@ bool ResponseEngine::prepare_sink() {
             if (!write_metadata(m_downloadPlan, validatorName, validatorValue,
                     m_downloadDecision.totalSize, ioError))
             {
-                m_output.close(ioError);
+                m_output.close();
                 m_message = std::move(ioError);
                 return false;
             }
         } else if (!remove_metadata(m_downloadPlan, ioError)) {
-            m_output.close(ioError);
+            m_output.close();
             m_message = std::move(ioError);
             return false;
         }
     } else if (!remove_metadata(m_downloadPlan, ioError)) {
-        m_output.close(ioError);
+        m_output.close();
         m_message = std::move(ioError);
         return false;
     }
@@ -624,11 +628,10 @@ TransportObserver::Directive ResponseEngine::on_data(std::span<const std::byte> 
         }
 
         if (!m_downloadPlan.destination.empty()) {
-            std::string ioError;
-            if (!m_output.is_open() || !m_output.write(chunk, ioError)) {
-                fail(Error::Io, ioError.empty() ?
+            if (!m_output || !m_output.write(chunk)) {
+                fail(Error::Io, m_output.error().empty() ?
                                     "Failed to write download destination" :
-                                    "Failed to write download destination: " + ioError);
+                                    "Failed to write download destination: " + m_output.error());
                 return Directive::Abort;
             }
         } else {
@@ -653,9 +656,8 @@ TransportObserver::Directive ResponseEngine::on_data(std::span<const std::byte> 
 }
 
 AttemptResult ResponseEngine::finish(TransportResult transportResult) {
-    std::string closeError;
-    if (!m_output.close(closeError)) {
-        fail(Error::Io, "Failed to close download destination: " + closeError);
+    if (!m_output.close()) {
+        fail(Error::Io, "Failed to close download destination: " + m_output.error());
     }
 
     if (m_restart) {

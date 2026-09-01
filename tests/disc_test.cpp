@@ -228,6 +228,9 @@ TEST(Disc, HashParser) {
 
 TEST(Disc, PublicPreflight) {
     EXPECT_EQ(disc::inspect("", {}).status, disc::Status::IOError);
+    const auto unsupported = disc::inspect("unsupported://disc.iso", {});
+    EXPECT_EQ(unsupported.status, disc::Status::IOError);
+    EXPECT_EQ(unsupported.message, "Location scheme is not supported");
 
     disc::Progress progress;
     progress.bytesRead.store(99, std::memory_order_relaxed);

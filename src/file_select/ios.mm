@@ -1,5 +1,7 @@
 #include "file_select_internal.hpp"
 
+#include "../io_internal.hpp"
+
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <objc/runtime.h>
@@ -54,12 +56,25 @@ NSURL* initial_directory_url(const std::string& defaultLocation) {
         return nil;
     }
 
-    NSString* path = [NSString stringWithUTF8String:defaultLocation.c_str()];
+    std::string resolvedPath = defaultLocation;
+    void* access = nullptr;
+    if (defaultLocation.starts_with("bookmark://")) {
+        auto resolved = borealis::io::detail::resolve_apple_bookmark(defaultLocation, true);
+        if (resolved.status != borealis::io::Status::Ok) {
+            return nil;
+        }
+        resolvedPath = std::move(resolved.path);
+        access = resolved.access;
+    }
+    NSString* path = [NSString stringWithUTF8String:resolvedPath.c_str()];
     if (path == nil) {
+        borealis::io::detail::release_access(access);
         return nil;
     }
     NSURL* url = [NSURL fileURLWithPath:path];
-    return [path hasSuffix:@"/"] ? url : url.URLByDeletingLastPathComponent;
+    NSURL* directory = [path hasSuffix:@"/"] ? url : url.URLByDeletingLastPathComponent;
+    borealis::io::detail::release_access(access);
+    return directory;
 }
 
 }  // namespace
@@ -85,10 +100,20 @@ NSURL* initial_directory_url(const std::string& defaultLocation) {
     didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls {
     Result result{.status = Status::Selected};
     for (NSURL* url in urls) {
-        const char* path = url.path.UTF8String;
-        if (path != nullptr) {
-            result.locations.emplace_back(path);
+        const BOOL accessing = [url startAccessingSecurityScopedResource];
+        std::string error;
+        std::string bookmark = borealis::io::detail::apple_bookmark_for_url(
+            (__bridge void*)url, error);
+        if (accessing) {
+            [url stopAccessingSecurityScopedResource];
         }
+        if (bookmark.empty()) {
+            result.status = Status::Failed;
+            result.locations.clear();
+            result.message = std::move(error);
+            break;
+        }
+        result.locations.push_back(std::move(bookmark));
     }
 
     if (result.locations.empty()) {
@@ -108,8 +133,11 @@ NSURL* initial_directory_url(const std::string& defaultLocation) {
 
 namespace borealis::file_select::detail {
 
-void open_ios_file(FileOptions options, Callback callback) {
-    UIViewController* presenter = presenter_from_window(options.parentWindow);
+namespace {
+
+void open_ios_picker(SDL_Window* parentWindow, std::string defaultLocation, bool multiSelect,
+    NSArray<UTType*>* contentTypes, Callback callback) {
+    UIViewController* presenter = presenter_from_window(parentWindow);
     if (presenter == nil) {
         complete(std::move(callback), {
             .status = Status::Failed,
@@ -119,11 +147,11 @@ void open_ios_file(FileOptions options, Callback callback) {
     }
 
     UIDocumentPickerViewController* picker = [[UIDocumentPickerViewController alloc]
-        initForOpeningContentTypes:@[ UTTypeItem ]
-                           asCopy:YES];
-    picker.allowsMultipleSelection = options.multiSelect ? YES : NO;
+        initForOpeningContentTypes:contentTypes
+                           asCopy:NO];
+    picker.allowsMultipleSelection = multiSelect ? YES : NO;
     picker.shouldShowFileExtensions = YES;
-    if (NSURL* directoryUrl = initial_directory_url(options.defaultLocation)) {
+    if (NSURL* directoryUrl = initial_directory_url(defaultLocation)) {
         picker.directoryURL = directoryUrl;
     }
 
@@ -134,6 +162,18 @@ void open_ios_file(FileOptions options, Callback callback) {
     objc_setAssociatedObject(
         picker, gPickerDelegateKey, delegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [presenter presentViewController:picker animated:YES completion:nil];
+}
+
+}  // namespace
+
+void open_ios_file(FileOptions options, Callback callback) {
+    open_ios_picker(options.parentWindow, std::move(options.defaultLocation), options.multiSelect,
+        @[ UTTypeItem ], std::move(callback));
+}
+
+void open_ios_folder(FolderOptions options, Callback callback) {
+    open_ios_picker(options.parentWindow, std::move(options.defaultLocation), false,
+        @[ UTTypeFolder ], std::move(callback));
 }
 
 }  // namespace borealis::file_select::detail

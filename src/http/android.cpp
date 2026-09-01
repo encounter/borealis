@@ -1,8 +1,8 @@
 #include "borealis/http.hpp"
 
 #include "../http_internal.hpp"
+#include "../jni_internal.hpp"
 
-#include <SDL3/SDL_system.h>
 #include <jni.h>
 
 #include <algorithm>
@@ -36,37 +36,6 @@ jlong total_timeout_ms(const detail::Deadline& deadline) {
         remaining->count(), std::numeric_limits<jlong>::max()));
 }
 
-bool clear_pending_exception(JNIEnv* env) {
-    if (env == nullptr || !env->ExceptionCheck()) {
-        return false;
-    }
-    env->ExceptionClear();
-    return true;
-}
-
-std::string to_string(JNIEnv* env, jstring value) {
-    if (env == nullptr || value == nullptr) {
-        return {};
-    }
-
-    const char* utf8 = env->GetStringUTFChars(value, nullptr);
-    if (utf8 == nullptr) {
-        clear_pending_exception(env);
-        return {};
-    }
-
-    std::string result{utf8};
-    env->ReleaseStringUTFChars(value, utf8);
-    return result;
-}
-
-jstring to_jstring(JNIEnv* env, std::string_view value) {
-    if (env == nullptr) {
-        return nullptr;
-    }
-    return env->NewStringUTF(std::string{value}.c_str());
-}
-
 Error map_java_error(int error) {
     switch (error) {
     case JavaErrorNone:
@@ -84,79 +53,28 @@ Error map_java_error(int error) {
     }
 }
 
-jclass load_app_class(JNIEnv* env, jobject activity, const char* className) {
-    jclass activityClass = env->GetObjectClass(activity);
-    if (activityClass == nullptr || clear_pending_exception(env)) {
-        return nullptr;
-    }
-
-    jmethodID getClassLoader =
-        env->GetMethodID(activityClass, "getClassLoader", "()Ljava/lang/ClassLoader;");
-    env->DeleteLocalRef(activityClass);
-    if (getClassLoader == nullptr || clear_pending_exception(env)) {
-        return nullptr;
-    }
-
-    jobject classLoader = env->CallObjectMethod(activity, getClassLoader);
-    if (classLoader == nullptr || clear_pending_exception(env)) {
-        return nullptr;
-    }
-
-    jclass classLoaderClass = env->FindClass("java/lang/ClassLoader");
-    if (classLoaderClass == nullptr || clear_pending_exception(env)) {
-        env->DeleteLocalRef(classLoader);
-        return nullptr;
-    }
-
-    jmethodID loadClass =
-        env->GetMethodID(classLoaderClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
-    env->DeleteLocalRef(classLoaderClass);
-    if (loadClass == nullptr || clear_pending_exception(env)) {
-        env->DeleteLocalRef(classLoader);
-        return nullptr;
-    }
-
-    jstring javaClassName = env->NewStringUTF(className);
-    if (javaClassName == nullptr || clear_pending_exception(env)) {
-        env->DeleteLocalRef(classLoader);
-        return nullptr;
-    }
-
-    auto* loadedClass =
-        static_cast<jclass>(env->CallObjectMethod(classLoader, loadClass, javaClassName));
-    env->DeleteLocalRef(javaClassName);
-    env->DeleteLocalRef(classLoader);
-    if (loadedClass == nullptr || clear_pending_exception(env)) {
-        return nullptr;
-    }
-    return loadedClass;
-}
-
 jobjectArray make_string_array(JNIEnv* env, const std::vector<Header>& headers, bool names) {
     jclass stringClass = env->FindClass("java/lang/String");
-    if (stringClass == nullptr || clear_pending_exception(env)) {
+    if (stringClass == nullptr || jni::clear_pending_exception(env)) {
         return nullptr;
     }
 
     jobjectArray array =
         env->NewObjectArray(static_cast<jsize>(headers.size()), stringClass, nullptr);
-    env->DeleteLocalRef(stringClass);
-    if (array == nullptr || clear_pending_exception(env)) {
+    if (array == nullptr || jni::clear_pending_exception(env)) {
         return nullptr;
     }
 
     for (jsize i = 0; i < static_cast<jsize>(headers.size()); ++i) {
         const std::string& value =
             names ? headers[static_cast<size_t>(i)].name : headers[static_cast<size_t>(i)].value;
-        jstring javaValue = to_jstring(env, value);
-        if (javaValue == nullptr || clear_pending_exception(env)) {
-            env->DeleteLocalRef(array);
+        jstring javaValue = jni::make_string(env, value);
+        if (javaValue == nullptr) {
             return nullptr;
         }
         env->SetObjectArrayElement(array, i, javaValue);
         env->DeleteLocalRef(javaValue);
-        if (clear_pending_exception(env)) {
-            env->DeleteLocalRef(array);
+        if (jni::clear_pending_exception(env)) {
             return nullptr;
         }
     }
@@ -174,20 +92,14 @@ std::vector<Header> read_headers(JNIEnv* env, jobjectArray names, jobjectArray v
     for (jsize i = 0; i < count; ++i) {
         auto* name = static_cast<jstring>(env->GetObjectArrayElement(names, i));
         auto* value = static_cast<jstring>(env->GetObjectArrayElement(values, i));
-        if (clear_pending_exception(env)) {
-            if (name != nullptr) {
-                env->DeleteLocalRef(name);
-            }
-            if (value != nullptr) {
-                env->DeleteLocalRef(value);
-            }
+        if (jni::clear_pending_exception(env)) {
             return {};
         }
 
         if (name != nullptr) {
             headers.push_back({
-                .name = to_string(env, name),
-                .value = to_string(env, value),
+                .name = jni::to_string(env, name),
+                .value = jni::to_string(env, value),
             });
         }
         if (name != nullptr) {
@@ -205,14 +117,13 @@ jbyteArray make_byte_array(JNIEnv* env, std::string_view value) {
         return nullptr;
     }
     jbyteArray result = env->NewByteArray(static_cast<jsize>(value.size()));
-    if (result == nullptr || clear_pending_exception(env)) {
+    if (result == nullptr || jni::clear_pending_exception(env)) {
         return nullptr;
     }
     if (!value.empty()) {
         env->SetByteArrayRegion(result, 0, static_cast<jsize>(value.size()),
             reinterpret_cast<const jbyte*>(value.data()));
-        if (clear_pending_exception(env)) {
-            env->DeleteLocalRef(result);
+        if (jni::clear_pending_exception(env)) {
             return nullptr;
         }
     }
@@ -228,7 +139,7 @@ detail::TransportResult result_from_response(JNIEnv* env, jobject response) {
     }
 
     jclass responseClass = env->GetObjectClass(response);
-    if (responseClass == nullptr || clear_pending_exception(env)) {
+    if (responseClass == nullptr || jni::clear_pending_exception(env)) {
         return {
             .error = Error::Network,
             .message = "Failed to inspect Android HTTP response",
@@ -237,8 +148,7 @@ detail::TransportResult result_from_response(JNIEnv* env, jobject response) {
 
     jfieldID errorField = env->GetFieldID(responseClass, "error", "I");
     jfieldID messageField = env->GetFieldID(responseClass, "message", "Ljava/lang/String;");
-    env->DeleteLocalRef(responseClass);
-    if (errorField == nullptr || messageField == nullptr || clear_pending_exception(env)) {
+    if (errorField == nullptr || messageField == nullptr || jni::clear_pending_exception(env)) {
         return {
             .error = Error::Network,
             .message = "Android HTTP response shape was not recognized",
@@ -247,19 +157,15 @@ detail::TransportResult result_from_response(JNIEnv* env, jobject response) {
 
     const int javaError = env->GetIntField(response, errorField);
     auto* message = static_cast<jstring>(env->GetObjectField(response, messageField));
-    if (clear_pending_exception(env)) {
+    if (jni::clear_pending_exception(env)) {
         return {
             .error = Error::Network,
             .message = "Failed to read Android HTTP response",
         };
     }
-    std::string messageString = to_string(env, message);
-    if (message != nullptr) {
-        env->DeleteLocalRef(message);
-    }
     return {
         .error = map_java_error(javaError),
-        .message = std::move(messageString),
+        .message = jni::to_string(env, message),
     };
 }
 
@@ -278,27 +184,16 @@ const char* backend_name() noexcept {
 }
 
 detail::TransportResult detail::send_request(const TransportRequest& request) {
-    auto* env = static_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
-    if (env == nullptr) {
+    auto* env = jni::env();
+    jni::LocalFrame frame{env};
+    if (!frame) {
         return {
             .error = Error::Network,
             .message = "Failed to access Android JNI environment",
         };
     }
 
-    jobject activity = static_cast<jobject>(SDL_GetAndroidActivity());
-    if (activity == nullptr || clear_pending_exception(env)) {
-        if (activity != nullptr) {
-            env->DeleteLocalRef(activity);
-        }
-        return {
-            .error = Error::Network,
-            .message = "Failed to access Android activity",
-        };
-    }
-
-    jclass clientClass = load_app_class(env, activity, "dev.encounter.borealis.BorealisHttpClient");
-    env->DeleteLocalRef(activity);
+    jclass clientClass = jni::find_app_class(env, "dev.encounter.borealis.BorealisHttpClient");
     if (clientClass == nullptr) {
         return {
             .error = Error::Network,
@@ -309,39 +204,22 @@ detail::TransportResult detail::send_request(const TransportRequest& request) {
     jmethodID requestMethod = env->GetStaticMethodID(clientClass, "request",
         "(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;[BIIJJJ)"
         "Ldev/encounter/borealis/BorealisHttpClient$Response;");
-    if (requestMethod == nullptr || clear_pending_exception(env)) {
-        env->DeleteLocalRef(clientClass);
+    if (requestMethod == nullptr || jni::clear_pending_exception(env)) {
         return {
             .error = Error::Network,
             .message = "Failed to find Android HTTP helper method",
         };
     }
 
-    jstring method = to_jstring(env, request.method == Method::Post ? "POST" : "GET");
-    jstring url = to_jstring(env, request.url);
+    jstring method = jni::make_string(env, request.method == Method::Post ? "POST" : "GET");
+    jstring url = jni::make_string(env, request.url);
     jobjectArray headerNames = make_string_array(env, request.headers, true);
     jobjectArray headerValues = make_string_array(env, request.headers, false);
     jbyteArray body = make_byte_array(
         env, request.method == Method::Post ? std::string_view{request.body} : std::string_view{});
     if (method == nullptr || url == nullptr || headerNames == nullptr || headerValues == nullptr ||
-        body == nullptr || clear_pending_exception(env))
+        body == nullptr)
     {
-        if (method != nullptr) {
-            env->DeleteLocalRef(method);
-        }
-        if (url != nullptr) {
-            env->DeleteLocalRef(url);
-        }
-        if (headerNames != nullptr) {
-            env->DeleteLocalRef(headerNames);
-        }
-        if (headerValues != nullptr) {
-            env->DeleteLocalRef(headerValues);
-        }
-        if (body != nullptr) {
-            env->DeleteLocalRef(body);
-        }
-        env->DeleteLocalRef(clientClass);
         return {
             .error = Error::Network,
             .message = "Failed to prepare Android HTTP request",
@@ -353,24 +231,14 @@ detail::TransportResult detail::send_request(const TransportRequest& request) {
         timeout_ms(request.deadline->idle_timeout()), total_timeout_ms(*request.deadline),
         static_cast<jlong>(reinterpret_cast<std::uintptr_t>(request.observer)),
         static_cast<jlong>(reinterpret_cast<std::uintptr_t>(request.signals)));
-    env->DeleteLocalRef(method);
-    env->DeleteLocalRef(url);
-    env->DeleteLocalRef(headerNames);
-    env->DeleteLocalRef(headerValues);
-    env->DeleteLocalRef(body);
-    env->DeleteLocalRef(clientClass);
-    if (clear_pending_exception(env)) {
+    if (jni::clear_pending_exception(env)) {
         return {
             .error = Error::Network,
             .message = "Android HTTP request failed with a Java exception",
         };
     }
 
-    TransportResult result = result_from_response(env, response);
-    if (response != nullptr) {
-        env->DeleteLocalRef(response);
-    }
-    return result;
+    return result_from_response(env, response);
 }
 
 }  // namespace borealis::http
@@ -409,8 +277,7 @@ extern "C" JNIEXPORT jboolean JNICALL Java_dev_encounter_borealis_BorealisHttpCl
         std::vector<std::byte> bytes(static_cast<size_t>(length));
         if (length > 0) {
             env->GetByteArrayRegion(data, 0, length, reinterpret_cast<jbyte*>(bytes.data()));
-            if (env->ExceptionCheck()) {
-                env->ExceptionClear();
+            if (borealis::jni::clear_pending_exception(env)) {
                 return JNI_TRUE;
             }
         }
