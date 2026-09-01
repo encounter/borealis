@@ -117,7 +117,8 @@ File::~File() {
 
 File::File(File&& other) noexcept
     : m_handle{std::exchange(other.m_handle, nullptr)},
-      m_access{std::exchange(other.m_access, nullptr)}, m_error{std::move(other.m_error)} {}
+      m_access{std::exchange(other.m_access, nullptr)},
+      m_writable{std::exchange(other.m_writable, false)}, m_error{std::move(other.m_error)} {}
 
 File& File::operator=(File&& other) noexcept {
     if (this != &other) {
@@ -127,6 +128,7 @@ File& File::operator=(File&& other) noexcept {
         detail::release_access(m_access);
         m_handle = std::exchange(other.m_handle, nullptr);
         m_access = std::exchange(other.m_access, nullptr);
+        m_writable = std::exchange(other.m_writable, false);
         m_error = std::move(other.m_error);
     }
     return *this;
@@ -183,8 +185,8 @@ bool File::write(std::span<const std::byte> bytes) noexcept {
     if (bytes.empty()) {
         return true;
     }
-    if (m_handle == nullptr) {
-        m_error = "File is not open";
+    if (m_handle == nullptr || !m_writable) {
+        m_error = m_handle == nullptr ? "File is not open" : "File is not writable";
         return false;
     }
     if (SDL_WriteIO(m_handle, bytes.data(), bytes.size()) != bytes.size()) {
@@ -210,7 +212,8 @@ bool File::close() noexcept {
     if (m_handle == nullptr) {
         return true;
     }
-    bool success = flush();
+    bool success = !m_writable || flush();
+    m_writable = false;
     SDL_IOStream* handle = std::exchange(m_handle, nullptr);
     if (!SDL_CloseIO(handle) && success) {
         set_sdl_error("Failed to close file");
@@ -255,7 +258,7 @@ OpenResult open(std::string_view location, File::Mode mode) {
             detail::release_access(access);
             return failed_open(native.status, std::move(native.message));
         }
-        return {.status = Status::Ok, .file = File{native.handle, access}};
+        return {.status = Status::Ok, .file = File{native.handle, access, true}};
     }
 #endif
     if (mode != File::Mode::Read && has_scheme(resolved)) {
@@ -276,7 +279,7 @@ OpenResult open(std::string_view location, File::Mode mode) {
             check(location) == Status::NotFound ? Status::NotFound : Status::Failed;
         return failed_open(status, message);
     }
-    return {.status = Status::Ok, .file = File{handle, access}};
+    return {.status = Status::Ok, .file = File{handle, access, mode != File::Mode::Read}};
 }
 
 Status check(std::string_view location) {

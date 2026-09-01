@@ -33,6 +33,7 @@ TEST_F(IOTest, StreamsAndSeeks) {
     const auto location = borealis::io::fs_path_to_string(directory / "sample.txt");
     auto opened = borealis::io::open(location);
     ASSERT_EQ(opened.status, borealis::io::Status::Ok) << opened.message;
+    EXPECT_FALSE(opened.file.writable());
     EXPECT_EQ(opened.file.size(), 6u);
 
     std::array<char, 4> bytes{};
@@ -42,6 +43,7 @@ TEST_F(IOTest, StreamsAndSeeks) {
     EXPECT_EQ(opened.file.read(bytes.data(), 4), 4u);
     EXPECT_EQ(std::string_view(bytes.data(), 4), "cdef");
     EXPECT_TRUE(opened.file.close());
+    EXPECT_FALSE(opened.file.writable());
 }
 
 TEST_F(IOTest, ChecksListsAndJoins) {
@@ -67,13 +69,16 @@ TEST_F(IOTest, WritesTruncatesAndAppends) {
     const auto location = borealis::io::fs_path_to_string(directory / "sample.txt");
     auto writer = borealis::io::open(location, borealis::io::File::Mode::Truncate);
     ASSERT_EQ(writer.status, borealis::io::Status::Ok) << writer.message;
+    EXPECT_TRUE(writer.file.writable());
     const std::string first = "first";
     EXPECT_TRUE(writer.file.write(std::as_bytes(std::span{first})));
     EXPECT_TRUE(writer.file.flush());
     EXPECT_TRUE(writer.file.close());
+    EXPECT_FALSE(writer.file.writable());
 
     writer = borealis::io::open(location, borealis::io::File::Mode::Append);
     ASSERT_EQ(writer.status, borealis::io::Status::Ok) << writer.message;
+    EXPECT_TRUE(writer.file.writable());
     const std::string second = "+second";
     EXPECT_TRUE(writer.file.write(std::as_bytes(std::span{second})));
     EXPECT_TRUE(writer.file.close());

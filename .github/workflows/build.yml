@@ -39,6 +39,7 @@ jobs:
               -DBOREALIS_ENABLE_DATA=OFF
               -DBOREALIS_ENABLE_DISC=OFF
               -DBOREALIS_ENABLE_FILE_SELECT=OFF
+              -DBOREALIS_ENABLE_HTTP=OFF
               -DBOREALIS_ENABLE_IO=OFF
               -DBOREALIS_HTTP_BACKEND=none
           - name: macOS AppleClang arm64

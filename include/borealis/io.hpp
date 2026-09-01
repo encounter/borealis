@@ -45,6 +45,7 @@ public:
     bool write(std::span<const std::byte> bytes) noexcept;
     bool flush() noexcept;
     bool close() noexcept;
+    bool writable() const noexcept { return m_writable; }
     const std::string& error() const noexcept { return m_error; }
     SDL_IOStream* handle() const noexcept { return m_handle; }
 
@@ -52,11 +53,13 @@ private:
     friend struct OpenResult;
     friend OpenResult open(std::string_view location, Mode mode);
 
-    File(SDL_IOStream* handle, void* access) noexcept : m_handle{handle}, m_access{access} {}
+    File(SDL_IOStream* handle, void* access, bool writable) noexcept
+        : m_handle{handle}, m_access{access}, m_writable{writable} {}
     void set_sdl_error(std::string_view action) noexcept;
 
     SDL_IOStream* m_handle = nullptr;
     void* m_access = nullptr;
+    bool m_writable = false;
     std::string m_error;
 };
 
