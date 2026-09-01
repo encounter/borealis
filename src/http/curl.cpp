@@ -233,6 +233,28 @@ detail::TransportResult detail::send_request(const TransportRequest& request) {
 
     const std::string url{request.url};
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    const CURLcode tlsResult = curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
+    if (tlsResult != CURLE_OK) {
+        curl_easy_cleanup(curl);
+        return {
+            .error = Error::Network,
+            .message =
+                std::string{"Failed to require TLS 1.2 or newer: "} + curl_easy_strerror(tlsResult),
+        };
+    }
+    const auto* versionInfo = curl_version_info(CURLVERSION_NOW);
+    if (versionInfo != nullptr && (versionInfo->features & CURL_VERSION_HTTP2) != 0) {
+        const CURLcode httpVersionResult =
+            curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS);
+        if (httpVersionResult != CURLE_OK) {
+            curl_easy_cleanup(curl);
+            return {
+                .error = Error::Network,
+                .message = std::string{"Failed to enable HTTP/2: "} +
+                           curl_easy_strerror(httpVersionResult),
+            };
+        }
+    }
     if (request.method == Method::Get) {
         curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
     } else if (request.method == Method::Head) {

@@ -48,6 +48,19 @@ struct WinHttpHandle {
     operator HINTERNET() const { return handle; }
 };
 
+bool configure_secure_protocols(HINTERNET session) {
+    DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
+#ifdef WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3
+    protocols |= WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
+    if (WinHttpSetOption(session, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof(protocols))) {
+        return true;
+    }
+    protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
+#endif
+    return WinHttpSetOption(
+               session, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof(protocols)) != FALSE;
+}
+
 std::wstring utf8_to_wide(std::string_view value) {
     if (value.empty()) {
         return {};
@@ -449,6 +462,9 @@ detail::TransportResult detail::send_request(const TransportRequest& request) {
     if (session.handle == nullptr) {
         return fail_from_last_error("Failed to create WinHTTP session");
     }
+    if (!configure_secure_protocols(session)) {
+        return fail_from_last_error("Failed to require TLS 1.2 or newer");
+    }
 
     const DWORD connectTimeout =
         timeout_ms(request.deadline->bounded_timeout(request.deadline->connect_timeout()));
@@ -476,6 +492,10 @@ detail::TransportResult detail::send_request(const TransportRequest& request) {
     if (httpRequest.handle == nullptr) {
         return fail_from_last_error("Failed to create request");
     }
+
+    DWORD httpProtocols = WINHTTP_PROTOCOL_FLAG_HTTP2;
+    (void)WinHttpSetOption(
+        httpRequest, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &httpProtocols, sizeof(httpProtocols));
 
     DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;
     WinHttpSetOption(
