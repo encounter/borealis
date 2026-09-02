@@ -23,7 +23,6 @@ enum class Backend {
 enum class Error {
     None,
     NoBackend,
-    NotInitialized,
     InvalidUrl,
     UnsupportedScheme,
     Timeout,
@@ -79,9 +78,6 @@ struct Result {
 bool available() noexcept;
 Backend backend() noexcept;
 const char* backend_name() noexcept;
-
-bool initialize() noexcept;
-void shutdown() noexcept;
 
 /** Starts an asynchronous HTTPS request. */
 Task<Result> start(Request request);

@@ -45,12 +45,7 @@ bool ascii_iequals(std::string_view lhs, std::string_view rhs) {
 
 // Invalid requests keep these tests offline for every backend.
 
-class HttpTest : public testing::Test {
-protected:
-    static void SetUpTestSuite() { ASSERT_TRUE(http::initialize()); }
-
-    static void TearDownTestSuite() { http::shutdown(); }
-};
+class HttpTest : public testing::Test {};
 
 TEST_F(HttpTest, BackendIdentity) {
     EXPECT_NE(http::backend_name(), nullptr);
@@ -315,25 +310,14 @@ TEST_F(HttpTest, LiveHeadMethod) {
     EXPECT_TRUE(result->response.body.empty());
 }
 
-TEST(HttpLifecycle, ExplicitInitialization) {
-    http::shutdown();
-    auto task = http::start({.url = "https://example.com/"});
-    ASSERT_TRUE(task.ready());
-    const auto result = task.try_take();
-    ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(
-        result->error, http::available() ? http::Error::NotInitialized : http::Error::NoBackend);
-
-    EXPECT_TRUE(http::initialize());
-    http::shutdown();
-}
-
 class HttpDownload : public testing::Test {
 protected:
     void SetUp() override {
         static std::atomic_uint64_t nextId = 0;
+        const auto* testInfo = testing::UnitTest::GetInstance()->current_test_info();
         directory = std::filesystem::temp_directory_path() /
-                    ("borealis-http-test-" + std::to_string(nextId.fetch_add(1)));
+                    ("borealis-http-test-" + std::string{testInfo->name()} + "-" +
+                        std::to_string(nextId.fetch_add(1)));
         ASSERT_TRUE(std::filesystem::create_directory(directory));
         destination = directory / "download.tmp";
     }

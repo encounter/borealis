@@ -24,6 +24,10 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
+#else
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 namespace borealis::io {
@@ -107,6 +111,153 @@ void release_access(void*) noexcept {}
 #endif
 
 }  // namespace detail
+
+RandomAccessFile::~RandomAccessFile() {
+    close();
+}
+
+RandomAccessFile::RandomAccessFile(RandomAccessFile&& other) noexcept
+    : m_handle{std::exchange(other.m_handle,
+#ifdef _WIN32
+          nullptr
+#else
+          -1
+#endif
+          )},
+      m_size{std::exchange(other.m_size, 0)} {
+}
+
+RandomAccessFile& RandomAccessFile::operator=(RandomAccessFile&& other) noexcept {
+    if (this != &other) {
+        close();
+        m_handle = std::exchange(other.m_handle,
+#ifdef _WIN32
+            nullptr
+#else
+            -1
+#endif
+        );
+        m_size = std::exchange(other.m_size, 0);
+    }
+    return *this;
+}
+
+RandomAccessFile::OpenResult RandomAccessFile::open(const std::filesystem::path& path) {
+    RandomAccessFile file;
+#ifdef _WIN32
+    HANDLE handle = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        const auto value = static_cast<int>(GetLastError());
+        return {
+            .status = value == ERROR_FILE_NOT_FOUND || value == ERROR_PATH_NOT_FOUND ?
+                          Status::NotFound :
+                          Status::Failed,
+            .message = "Failed to open file: " + std::system_category().message(value),
+        };
+    }
+    LARGE_INTEGER size{};
+    if (GetFileSizeEx(handle, &size) == FALSE) {
+        const auto value = static_cast<int>(GetLastError());
+        CloseHandle(handle);
+        return {
+            .status = Status::Failed,
+            .message = "Failed to get file size: " + std::system_category().message(value),
+        };
+    }
+    file.m_handle = handle;
+    file.m_size = static_cast<uint64_t>(size.QuadPart);
+#else
+    const int handle = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (handle < 0) {
+        const int value = errno;
+        return {
+            .status = value == ENOENT || value == ENOTDIR ? Status::NotFound : Status::Failed,
+            .message = system_error_message("Failed to open file", value),
+        };
+    }
+    struct stat info{};
+    if (fstat(handle, &info) != 0) {
+        const int value = errno;
+        ::close(handle);
+        return {
+            .status = Status::Failed,
+            .message = system_error_message("Failed to get file size", value),
+        };
+    }
+    file.m_handle = handle;
+    file.m_size = static_cast<uint64_t>(info.st_size);
+#endif
+    return {.status = Status::Ok, .file = std::move(file)};
+}
+
+RandomAccessFile::operator bool() const noexcept {
+#ifdef _WIN32
+    return m_handle != nullptr;
+#else
+    return m_handle >= 0;
+#endif
+}
+
+size_t RandomAccessFile::read_at(
+    uint64_t offset, std::span<std::byte> out, std::error_code& error) const noexcept {
+    error.clear();
+    size_t completed = 0;
+    while (completed < out.size()) {
+#ifdef _WIN32
+        OVERLAPPED overlapped{};
+        const uint64_t position = offset + completed;
+        overlapped.Offset = static_cast<DWORD>(position);
+        overlapped.OffsetHigh = static_cast<DWORD>(position >> 32);
+        DWORD read = 0;
+        const DWORD requested = static_cast<DWORD>(
+            std::min<size_t>(out.size() - completed, std::numeric_limits<DWORD>::max()));
+        if (ReadFile(static_cast<HANDLE>(m_handle), out.data() + completed, requested, &read,
+                &overlapped) == FALSE)
+        {
+            const auto value = static_cast<int>(GetLastError());
+            if (value == ERROR_HANDLE_EOF) {
+                break;
+            }
+            error = {value, std::system_category()};
+            return completed;
+        }
+#else
+        const auto read = pread(m_handle, out.data() + completed, out.size() - completed,
+            static_cast<off_t>(offset + completed));
+        if (read < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            error = {errno, std::generic_category()};
+            return completed;
+        }
+#endif
+        if (read == 0) {
+            break;
+        }
+        completed += static_cast<size_t>(read);
+    }
+    return completed;
+}
+
+bool RandomAccessFile::close() noexcept {
+#ifdef _WIN32
+    if (m_handle == nullptr) {
+        return true;
+    }
+    const bool result = CloseHandle(static_cast<HANDLE>(m_handle)) != FALSE;
+    m_handle = nullptr;
+#else
+    if (m_handle < 0) {
+        return true;
+    }
+    const bool result = ::close(m_handle) == 0;
+    m_handle = -1;
+#endif
+    m_size = 0;
+    return result;
+}
 
 File::~File() {
     if (m_handle != nullptr) {

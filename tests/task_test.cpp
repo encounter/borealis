@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -77,6 +78,46 @@ TEST(Task, PreservesUnexpectedExceptions) {
     ASSERT_TRUE(task.ready());
     EXPECT_THROW(task.try_take(), std::runtime_error);
     EXPECT_FALSE(task.try_take().has_value());
+}
+
+TEST(Task, SpawnRunsOnSharedPoolAndReportsProgress) {
+    auto task = borealis::spawn([](borealis::TaskContext& context) {
+        context.report_progress(3, 5);
+        return 42;
+    });
+    while (!task.ready()) {
+        std::this_thread::yield();
+    }
+    const auto progress = task.progress();
+    EXPECT_EQ(progress.completed, 3u);
+    EXPECT_EQ(progress.total, 5u);
+    EXPECT_EQ(task.try_take(), 42);
+    borealis::shutdown();
+}
+
+TEST(Task, ShutdownDrainsAndAllowsLazyRestart) {
+    std::atomic_bool started = false;
+    auto canceled = borealis::spawn([&started](borealis::TaskContext& context) {
+        started.store(true, std::memory_order_release);
+        while (!context.cancel_requested()) {
+            std::this_thread::yield();
+        }
+        return 1;
+    });
+    while (!started.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+
+    borealis::shutdown();
+    ASSERT_TRUE(canceled.ready());
+    EXPECT_EQ(canceled.try_take(), 1);
+
+    auto restarted = borealis::spawn([](borealis::TaskContext&) { return 2; });
+    while (!restarted.ready()) {
+        std::this_thread::yield();
+    }
+    EXPECT_EQ(restarted.try_take(), 2);
+    borealis::shutdown();
 }
 
 }  // namespace

@@ -22,6 +22,7 @@ Supported platforms: Windows, Linux, Android, macOS, iOS and tvOS.
 | `borealis::log`          | fmt-based logging + sinks (console, rotating file, logcat, ring buffer) | ✅       |
 | `borealis::presentation` | Android frame-rate configuration                                        | ✅       |
 | `borealis::sentry`       | Optional sentry-native/crashpad integration and consent state           | ✅       |
+| `borealis::task`         | Shared async task pool with cancellation and progress                   | ✅       |
 | `borealis::update`       | Update checks via GitHub releases                                       | ✅       |
 
 Borealis also provides an [Android platform layer](platforms/android/README.md) that integrates SDL, Aurora and provides
@@ -80,8 +81,8 @@ inline constexpr borealis::AppInfo AppInfo{
 ### HTTP and update checks
 
 `borealis::http` provides pollable asynchronous HTTPS requests using WinHTTP on Windows, NSURLSession on Apple, libcurl
-on Linux or OkHttp on Android. Call `http::initialize()` after startup and `http::shutdown()` before shutdown. The
-worker pool grows on demand and releases idle threads automatically.
+on Linux or OkHttp on Android. The shared worker pool starts lazily, grows on demand, and releases idle threads
+automatically. Call `borealis::shutdown()` during application shutdown to cancel and drain outstanding work.
 
 Asynchronous operations return a `Task<T>`. Poll with `ready()` or `try_take()`, request cancellation with `cancel()`
 and use `map()` to transform results.

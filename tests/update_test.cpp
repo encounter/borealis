@@ -280,18 +280,4 @@ TEST(Update, CheckWithoutBackend) {
     EXPECT_EQ(result->message, "No HTTP backend is available");
 }
 
-TEST(Update, CheckRequiresHttpInitialization) {
-    if (!http::available()) {
-        return;
-    }
-    http::shutdown();
-    auto check = update::check_latest_github_release(TestApp);
-    EXPECT_TRUE(check.ready());
-    const auto result = check.try_take();
-    ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(result->status, Status::Failed);
-    EXPECT_EQ(result->message, "HTTP worker pool is not initialized");
-    EXPECT_FALSE(check.try_take().has_value());
-}
-
 }  // namespace

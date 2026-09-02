@@ -21,7 +21,7 @@ target_link_libraries(borealis_version_test PRIVATE borealis::core)
 borealis_add_gtest(borealis_version_test)
 
 add_executable(borealis_task_test task_test.cpp)
-target_link_libraries(borealis_task_test PRIVATE borealis::core)
+target_link_libraries(borealis_task_test PRIVATE borealis::task)
 borealis_add_gtest(borealis_task_test)
 
 add_executable(borealis_presentation_test presentation_test.cpp)

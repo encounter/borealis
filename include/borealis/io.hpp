@@ -63,6 +63,42 @@ private:
     std::string m_error;
 };
 
+/** Read-only file whose handle remains bound across rename and delete. */
+class RandomAccessFile {
+public:
+    struct OpenResult;
+
+    RandomAccessFile() = default;
+    ~RandomAccessFile();
+    RandomAccessFile(const RandomAccessFile&) = delete;
+    RandomAccessFile& operator=(const RandomAccessFile&) = delete;
+    RandomAccessFile(RandomAccessFile&& other) noexcept;
+    RandomAccessFile& operator=(RandomAccessFile&& other) noexcept;
+
+    static OpenResult open(const std::filesystem::path& path);
+
+    explicit operator bool() const noexcept;
+    uint64_t size() const noexcept { return m_size; }
+    /** Reads from an absolute offset without changing shared cursor state. */
+    size_t read_at(
+        uint64_t offset, std::span<std::byte> out, std::error_code& error) const noexcept;
+    bool close() noexcept;
+
+private:
+#ifdef _WIN32
+    void* m_handle = nullptr;
+#else
+    int m_handle = -1;
+#endif
+    uint64_t m_size = 0;
+};
+
+struct RandomAccessFile::OpenResult {
+    Status status = Status::Failed;
+    RandomAccessFile file;
+    std::string message;
+};
+
 struct OpenResult {
     Status status = Status::Failed;
     File file;

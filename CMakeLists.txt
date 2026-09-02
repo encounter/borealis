@@ -65,6 +65,11 @@ target_include_directories(borealis_core INTERFACE
 target_compile_features(borealis_core INTERFACE cxx_std_20)
 target_compile_definitions(borealis_core INTERFACE BOREALIS_BUILD_TYPE="$<IF:$<BOOL:$<CONFIG>>,$<CONFIG>,None>")
 
+find_package(Threads REQUIRED)
+add_library(borealis_task STATIC src/task.cpp)
+add_library(borealis::task ALIAS borealis_task)
+target_link_libraries(borealis_task PUBLIC borealis_core PRIVATE Threads::Threads)
+
 # For standalone builds, fetch Aurora main branch to use its CMake modules + includes
 set(_borealis_aurora_cmake_dir "")
 if (NOT TARGET aurora::core)
@@ -389,7 +394,6 @@ if (BOREALIS_ENABLE_HTTP)
         message(FATAL_ERROR "borealis::http: unknown BOREALIS_HTTP_BACKEND '${BOREALIS_HTTP_BACKEND}'")
     endif ()
 
-    find_package(Threads REQUIRED)
     add_library(borealis_http STATIC
             src/http.cpp
             src/http_download.cpp
@@ -397,7 +401,7 @@ if (BOREALIS_ENABLE_HTTP)
     )
     add_library(borealis::http ALIAS borealis_http)
     target_link_libraries(borealis_http
-            PUBLIC borealis_core
+            PUBLIC borealis_core borealis_task
             PRIVATE borealis_io borealis_json_dep Threads::Threads)
 
     if (_borealis_http_backend STREQUAL "winhttp")

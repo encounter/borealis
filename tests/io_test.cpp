@@ -46,6 +46,28 @@ TEST_F(IOTest, StreamsAndSeeks) {
     EXPECT_FALSE(opened.file.writable());
 }
 
+TEST_F(IOTest, RandomAccessFileStaysBoundAcrossRenameAndDelete) {
+    auto opened = borealis::io::RandomAccessFile::open(directory / "sample.txt");
+    ASSERT_EQ(opened.status, borealis::io::Status::Ok) << opened.message;
+    EXPECT_EQ(opened.file.size(), 6u);
+
+    const auto renamed = directory / "renamed.txt";
+    std::filesystem::rename(directory / "sample.txt", renamed);
+    std::ofstream{directory / "sample.txt", std::ios::binary} << "replacement";
+
+    std::array<char, 4> bytes{};
+    std::error_code error;
+    EXPECT_EQ(opened.file.read_at(2, std::as_writable_bytes(std::span{bytes}), error), 4u);
+    EXPECT_FALSE(error);
+    EXPECT_EQ(std::string_view(bytes.data(), bytes.size()), "cdef");
+
+    EXPECT_TRUE(std::filesystem::remove(renamed));
+    bytes.fill(0);
+    EXPECT_EQ(opened.file.read_at(0, std::as_writable_bytes(std::span{bytes}), error), 4u);
+    EXPECT_FALSE(error);
+    EXPECT_EQ(std::string_view(bytes.data(), bytes.size()), "abcd");
+}
+
 TEST_F(IOTest, ChecksListsAndJoins) {
     const auto folder = borealis::io::fs_path_to_string(directory);
     EXPECT_EQ(borealis::io::check(folder), borealis::io::Status::Ok);

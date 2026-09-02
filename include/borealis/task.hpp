@@ -30,6 +30,8 @@ struct TaskSignals {
     std::atomic_bool cancelRequested = false;
 };
 
+bool submit_task(std::function<void(TaskSignals*)> function, std::shared_ptr<TaskSignals> signals);
+
 enum class TaskStateStatus {
     Pending,
     Ready,
@@ -112,6 +114,30 @@ template <typename T>
 Task<T> make_ready_task(T value);
 
 }  // namespace detail
+
+class TaskContext {
+public:
+    explicit TaskContext(detail::TaskSignals* signals) : m_signals{signals} {}
+
+    bool cancel_requested() const noexcept {
+        return m_signals->cancelRequested.load(std::memory_order_relaxed);
+    }
+
+    void report_progress(
+        std::uint64_t completed, std::optional<std::uint64_t> total = {}) noexcept {
+        m_signals->completed.store(completed, std::memory_order_relaxed);
+        if (total) {
+            m_signals->total.store(*total, std::memory_order_relaxed);
+            m_signals->totalKnown.store(true, std::memory_order_release);
+        }
+    }
+
+private:
+    detail::TaskSignals* m_signals;
+};
+
+/** Cancels and drains work on the shared background pool. Later work restarts it lazily. */
+void shutdown() noexcept;
 
 /** Move-only handle for an async operation. Requests cancellation when dropped. */
 template <typename T>
@@ -261,6 +287,32 @@ private:
 
     friend class detail::TaskSource<T>;
 };
+
+/** Runs cancellable work on the shared bounded worker pool. */
+template <typename F>
+auto spawn(F&& function)
+    -> Task<std::remove_cvref_t<std::invoke_result_t<std::decay_t<F>&, TaskContext&>>> {
+    using Function = std::decay_t<F>;
+    using Result = std::remove_cvref_t<std::invoke_result_t<Function&, TaskContext&>>;
+    static_assert(!std::is_void_v<Result>, "spawn requires a value result");
+
+    detail::TaskSource<Result> source;
+    auto task = source.task();
+    auto work = [source, function = Function{std::forward<F>(function)}](
+                    detail::TaskSignals* signals) mutable {
+        try {
+            TaskContext context{signals};
+            source.set_value(std::invoke(function, context));
+        } catch (...) {
+            source.set_exception(std::current_exception());
+        }
+    };
+    if (!detail::submit_task(std::move(work), source.signals())) {
+        source.set_exception(std::make_exception_ptr(
+            std::runtime_error{"Background worker pool could not accept the task"}));
+    }
+    return task;
+}
 
 namespace detail {
 
