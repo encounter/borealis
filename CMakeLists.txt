@@ -194,7 +194,7 @@ endif ()
 
 if (BOREALIS_ENABLE_CLI)
     if (NOT TARGET cxxopts::cxxopts)
-        find_package(cxxopts 3 CONFIG QUIET)
+        find_package(cxxopts 3 CONFIG QUIET GLOBAL)
         if (NOT cxxopts_FOUND)
             include(FetchContent)
             FetchContent_Declare(cxxopts
@@ -458,7 +458,7 @@ endif ()
 
 if (_borealis_json_needed)
     if (NOT TARGET nlohmann_json::nlohmann_json)
-        find_package(nlohmann_json 3 CONFIG QUIET)
+        find_package(nlohmann_json 3 CONFIG QUIET GLOBAL)
         if (NOT nlohmann_json_FOUND)
             include(FetchContent)
             FetchContent_Declare(nlohmann_json
