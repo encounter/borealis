@@ -40,6 +40,7 @@ using detail::platform::last_socket_error;
 using detail::platform::map_socket_error;
 using detail::platform::NativeSocket;
 using detail::platform::PollDescriptor;
+using detail::platform::prepare_connect;
 using detail::platform::set_nonblocking;
 using detail::platform::set_socket_option;
 using detail::platform::socket_error_message;
@@ -617,6 +618,7 @@ private:
                 lastError = last_socket_error();
                 continue;
             }
+            prepare_connect(state.socket, reinterpret_cast<const sockaddr*>(&address.storage));
             const int result = ::connect(
                 state.socket, reinterpret_cast<const sockaddr*>(&address.storage), address.length);
             if (result == 0) {

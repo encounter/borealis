@@ -1,5 +1,7 @@
 #include "platform.hpp"
 
+#include <mstcpip.h>
+
 #include <algorithm>
 #include <array>
 #include <climits>
@@ -101,6 +103,30 @@ void configure_common_socket(NativeSocket) noexcept {}
 void configure_listener_reuse(NativeSocket socket) noexcept {
     const int enabled = 1;
     set_socket_option(socket, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, &enabled, sizeof(enabled));
+}
+
+static bool is_loopback(const sockaddr* address) noexcept {
+    if (address->sa_family == AF_INET) {
+        const auto* in4 = reinterpret_cast<const sockaddr_in*>(address);
+        return in4->sin_addr.S_un.S_un_b.s_b1 == 127;
+    }
+    if (address->sa_family == AF_INET6) {
+        const auto* in6 = reinterpret_cast<const sockaddr_in6*>(address);
+        return IN6_IS_ADDR_LOOPBACK(&in6->sin6_addr);
+    }
+    return false;
+}
+
+void prepare_connect(NativeSocket socket, const sockaddr* address) noexcept {
+    if (!is_loopback(address)) {
+        return;
+    }
+    TCP_INITIAL_RTO_PARAMETERS parameters{};
+    parameters.Rtt = TCP_INITIAL_RTO_DEFAULT_RTT;
+    parameters.MaxSynRetransmissions = TCP_INITIAL_RTO_NO_SYN_RETRANSMISSIONS;
+    DWORD bytes = 0;
+    WSAIoctl(socket, SIO_TCP_INITIAL_RTO, &parameters, sizeof(parameters), nullptr, 0, &bytes,
+        nullptr, nullptr);
 }
 
 void shutdown_send(NativeSocket socket) noexcept {

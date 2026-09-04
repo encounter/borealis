@@ -111,6 +111,8 @@ void shutdown_send(NativeSocket socket) noexcept {
     ::shutdown(socket, SHUT_WR);
 }
 
+void prepare_connect(NativeSocket, const sockaddr*) noexcept {}
+
 int socket_error(NativeSocket socket) noexcept {
     int error = 0;
     SockLength length = sizeof(error);

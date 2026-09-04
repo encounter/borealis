@@ -59,6 +59,7 @@ bool set_socket_option(
     NativeSocket socket, int level, int name, const void* value, size_t size) noexcept;
 void configure_common_socket(NativeSocket socket) noexcept;
 void configure_listener_reuse(NativeSocket socket) noexcept;
+void prepare_connect(NativeSocket socket, const sockaddr* address) noexcept;
 void shutdown_send(NativeSocket socket) noexcept;
 int socket_error(NativeSocket socket) noexcept;
 

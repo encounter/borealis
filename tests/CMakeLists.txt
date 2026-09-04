@@ -13,7 +13,7 @@ endif ()
 
 function(borealis_add_gtest target)
     target_link_libraries(${target} PRIVATE gtest gtest_main)
-    gtest_discover_tests(${target})
+    gtest_discover_tests(${target} DISCOVERY_MODE PRE_TEST)
 endfunction()
 
 add_executable(borealis_version_test version_test.cpp)
