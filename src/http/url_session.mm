@@ -1,6 +1,8 @@
 #include "borealis/http.hpp"
 
+#include "url_session_common.hpp"
 #include "../http_internal.hpp"
+#include "borealis/log.hpp"
 
 #import <Foundation/Foundation.h>
 
@@ -11,27 +13,10 @@
 
 namespace {
 
-std::string to_string(NSString* value) {
-    if (value == nil) {
-        return {};
-    }
+using borealis::detail::url_session::response_headers;
+using borealis::detail::url_session::to_string;
 
-    const char* utf8 = [value UTF8String];
-    return utf8 == nullptr ? std::string{} : std::string{utf8};
-}
-
-std::vector<borealis::http::Header> to_headers(NSHTTPURLResponse* response) {
-    std::vector<borealis::http::Header> result;
-    NSDictionary* headers = response.allHeaderFields;
-    for (id key in headers) {
-        id value = headers[key];
-        result.push_back({
-            .name = to_string([key description]),
-            .value = to_string([value description]),
-        });
-    }
-    return result;
-}
+constexpr borealis::Log Log{"borealis::http"};
 
 }  // namespace
 
@@ -98,13 +83,19 @@ didReceiveResponse:(NSURLResponse*)response
     try {
         NSHTTPURLResponse* httpResponse = (NSHTTPURLResponse*)response;
         if (_observer->on_response(
-                static_cast<int>(httpResponse.statusCode), to_headers(httpResponse)) ==
+                static_cast<int>(httpResponse.statusCode), response_headers(httpResponse)) ==
             borealis::http::detail::TransportObserver::Directive::Abort)
         {
             completionHandler(NSURLSessionResponseCancel);
             return;
         }
+    } catch (const std::exception& exception) {
+        Log.error("{}: {}", __func__, exception.what());
+        self.callbackFailed = YES;
+        completionHandler(NSURLSessionResponseCancel);
+        return;
     } catch (...) {
+        Log.error("{}: unknown exception", __func__);
         self.callbackFailed = YES;
         completionHandler(NSURLSessionResponseCancel);
         return;
@@ -129,7 +120,13 @@ didReceiveResponse:(NSURLResponse*)response
             [dataTask cancel];
             return;
         }
+    } catch (const std::exception& exception) {
+        Log.error("{}: {}", __func__, exception.what());
+        self.callbackFailed = YES;
+        [dataTask cancel];
+        return;
     } catch (...) {
+        Log.error("{}: unknown exception", __func__);
         self.callbackFailed = YES;
         [dataTask cancel];
         return;
@@ -151,27 +148,8 @@ didReceiveResponse:(NSURLResponse*)response
 namespace borealis::http {
 namespace {
 
-NSString* to_nsstring(std::string_view value) {
-    return [[NSString alloc] initWithBytes:value.data()
-                                    length:value.size()
-                                  encoding:NSUTF8StringEncoding];
-}
-
-Error map_nsurl_error(NSError* error) {
-    if (error == nil || ![error.domain isEqualToString:NSURLErrorDomain]) {
-        return Error::Network;
-    }
-
-    switch (error.code) {
-    case NSURLErrorTimedOut:
-        return Error::Timeout;
-    case NSURLErrorBadURL:
-    case NSURLErrorUnsupportedURL:
-        return Error::InvalidUrl;
-    default:
-        return Error::Network;
-    }
-}
+using borealis::detail::url_session::to_nsstring;
+using borealis::detail::url_session::to_string;
 
 struct SessionState {
     BorealisHttpRequestDelegate* __strong delegate;
@@ -309,7 +287,7 @@ detail::TransportResult detail::send_request(const TransportRequest& request) {
         }
         if (delegate.error != nil) {
             return {
-                .error = map_nsurl_error(delegate.error),
+                .error = borealis::detail::url_session::map_error<Error>(delegate.error),
                 .message = to_string(delegate.error.localizedDescription),
             };
         }

@@ -4,6 +4,7 @@
 #include <fmt/format.h>
 
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -172,3 +173,30 @@ template <>
 struct fmt::formatter<borealis::LogLevel> : formatter<std::string_view> {
     auto format(borealis::LogLevel level, format_context& ctx) const -> format_context::iterator;
 };
+
+// Closes a function-try-block at an ABI, foreign callback, thread, or noexcept boundary.
+#define BOREALIS_CATCH()                                                                           \
+    catch (const std::exception& boundaryException) {                                              \
+        ::Log.error("{}: {}", __func__, boundaryException.what());                                 \
+    }                                                                                              \
+    catch (...) {                                                                                  \
+        ::Log.error("{}: unknown exception", __func__);                                            \
+    }
+
+#define BOREALIS_CATCH_RETURN(value)                                                               \
+    catch (const std::exception& boundaryException) {                                              \
+        ::Log.error("{}: {}", __func__, boundaryException.what());                                 \
+        return value;                                                                              \
+    }                                                                                              \
+    catch (...) {                                                                                  \
+        ::Log.error("{}: unknown exception", __func__);                                            \
+        return value;                                                                              \
+    }
+
+#define BOREALIS_CATCH_FATAL()                                                                     \
+    catch (const std::exception& boundaryException) {                                              \
+        ::Log.fatal("{}: {}", __func__, boundaryException.what());                                 \
+    }                                                                                              \
+    catch (...) {                                                                                  \
+        ::Log.fatal("{}: unknown exception", __func__);                                            \
+    }

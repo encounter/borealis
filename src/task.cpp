@@ -1,5 +1,7 @@
 #include "borealis/task.hpp"
 
+#include "borealis/log.hpp"
+
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -7,9 +9,12 @@
 #include <thread>
 #include <vector>
 
+namespace {
+constexpr borealis::Log Log{"borealis::task"};
+}
+
 namespace borealis::detail {
 namespace {
-
 struct WorkItem {
     std::function<void(TaskSignals*)> function;
     std::shared_ptr<TaskSignals> signals;
@@ -54,7 +59,10 @@ public:
         lock.unlock();
         for (const auto& worker : m_workers) {
             if (worker->thread.joinable()) {
-                worker->thread.join();
+                try {
+                    worker->thread.join();
+                }
+                BOREALIS_CATCH_FATAL()
             }
         }
         m_workers.clear();
@@ -76,12 +84,21 @@ private:
         ++m_liveWorkers;
         try {
             workerPtr->thread = std::thread{[this, workerPtr] { worker_main(workerPtr); }};
+        } catch (const std::exception& exception) {
+            ::Log.error("Could not start task worker: {}", exception.what());
+            worker_start_failed();
+            return false;
         } catch (...) {
-            --m_liveWorkers;
-            m_workers.pop_back();
+            ::Log.error("Could not start task worker: unknown exception");
+            worker_start_failed();
             return false;
         }
         return true;
+    }
+
+    void worker_start_failed() noexcept {
+        --m_liveWorkers;
+        m_workers.pop_back();
     }
 
     void reap_workers() {
@@ -103,7 +120,7 @@ private:
         m_workersStopped.notify_all();
     }
 
-    void worker_main(Worker* worker) {
+    void worker_main(Worker* worker) noexcept try {
         for (;;) {
             WorkItem item;
             {
@@ -124,6 +141,14 @@ private:
             }
             item.function(item.signals.get());
         }
+    } catch (const std::exception& exception) {
+        ::Log.error("{}: {}", __func__, exception.what());
+        std::lock_guard lock{m_mutex};
+        retire_worker(worker);
+    } catch (...) {
+        ::Log.error("{}: unknown exception", __func__);
+        std::lock_guard lock{m_mutex};
+        retire_worker(worker);
     }
 
     std::mutex m_mutex;
@@ -141,7 +166,39 @@ std::mutex g_poolMutex;
 std::unique_ptr<WorkerPool> g_pool;
 bool g_shutdownInProgress = false;
 
+std::mutex g_hookMutex;
+std::vector<std::function<void()>> g_shutdownHooks;
+std::mutex g_shutdownMutex;
+
 }  // namespace
+
+void register_shutdown_hook(std::function<void()> hook) {
+    std::lock_guard lock{g_hookMutex};
+    g_shutdownHooks.emplace_back(std::move(hook));
+}
+
+void run_shutdown_hooks() noexcept {
+    std::vector<std::function<void()>> hooks;
+    try {
+        std::lock_guard lock{g_hookMutex};
+        hooks = g_shutdownHooks;
+    } catch (const std::exception& exception) {
+        ::Log.error("{}: {}", __func__, exception.what());
+        return;
+    } catch (...) {
+        ::Log.error("{}: unknown exception", __func__);
+        return;
+    }
+    for (auto& hook : hooks) {
+        try {
+            hook();
+        } catch (const std::exception& exception) {
+            ::Log.error("{}: {}", __func__, exception.what());
+        } catch (...) {
+            ::Log.error("{}: unknown exception", __func__);
+        }
+    }
+}
 
 void shutdown_task_pool() noexcept {
     std::unique_ptr<WorkerPool> pool;
@@ -172,7 +229,11 @@ bool submit_task(std::function<void(TaskSignals*)> function, std::shared_ptr<Tas
             g_pool = std::make_unique<WorkerPool>();
         }
         return g_pool->submit({std::move(function), std::move(signals)});
+    } catch (const std::exception& exception) {
+        ::Log.error("{}: {}", __func__, exception.what());
+        return false;
     } catch (...) {
+        ::Log.error("{}: unknown exception", __func__);
         return false;
     }
 }
@@ -182,6 +243,8 @@ bool submit_task(std::function<void(TaskSignals*)> function, std::shared_ptr<Tas
 namespace borealis {
 
 void shutdown() noexcept {
+    std::lock_guard lock{detail::g_shutdownMutex};
+    detail::run_shutdown_hooks();
     detail::shutdown_task_pool();
 }
 

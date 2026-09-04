@@ -1,11 +1,18 @@
 #pragma once
 
+#include "borealis/http.hpp"
+
 #include <SDL3/SDL_system.h>
 
 #include <jni.h>
 
+#include <algorithm>
+#include <chrono>
+#include <limits>
+#include <mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace borealis::jni {
 
@@ -70,6 +77,85 @@ inline jstring make_string(JNIEnv* env, std::string_view value) {
         return nullptr;
     }
     return result;
+}
+
+inline int timeout_ms(std::chrono::milliseconds timeout) {
+    return static_cast<int>(std::clamp<std::chrono::milliseconds::rep>(
+        timeout.count(), 1, std::numeric_limits<int>::max()));
+}
+
+inline jobjectArray make_header_array(
+    JNIEnv* env, const std::vector<http::Header>& headers, bool names) {
+    jclass stringClass = env->FindClass("java/lang/String");
+    if (stringClass == nullptr || clear_pending_exception(env)) {
+        return nullptr;
+    }
+    jobjectArray result =
+        env->NewObjectArray(static_cast<jsize>(headers.size()), stringClass, nullptr);
+    if (result == nullptr || clear_pending_exception(env)) {
+        return nullptr;
+    }
+    for (jsize index = 0; index < static_cast<jsize>(headers.size()); ++index) {
+        const auto& header = headers[static_cast<size_t>(index)];
+        jstring value = make_string(env, names ? header.name : header.value);
+        if (value == nullptr) {
+            return nullptr;
+        }
+        env->SetObjectArrayElement(result, index, value);
+        env->DeleteLocalRef(value);
+        if (clear_pending_exception(env)) {
+            return nullptr;
+        }
+    }
+    return result;
+}
+
+inline jbyteArray make_byte_array(JNIEnv* env, std::string_view value) {
+    if (value.size() > static_cast<size_t>(std::numeric_limits<jsize>::max())) {
+        return nullptr;
+    }
+    jbyteArray result = env->NewByteArray(static_cast<jsize>(value.size()));
+    if (result == nullptr || clear_pending_exception(env)) {
+        return nullptr;
+    }
+    if (!value.empty()) {
+        env->SetByteArrayRegion(result, 0, static_cast<jsize>(value.size()),
+            reinterpret_cast<const jbyte*>(value.data()));
+        if (clear_pending_exception(env)) {
+            return nullptr;
+        }
+    }
+    return result;
+}
+
+inline std::vector<http::Header> read_headers(
+    JNIEnv* env, jobjectArray names, jobjectArray values) {
+    std::vector<http::Header> headers;
+    if (names == nullptr || values == nullptr) {
+        return headers;
+    }
+    const jsize count = std::min(env->GetArrayLength(names), env->GetArrayLength(values));
+    headers.reserve(static_cast<size_t>(count));
+    for (jsize index = 0; index < count; ++index) {
+        auto* name = static_cast<jstring>(env->GetObjectArrayElement(names, index));
+        auto* value = static_cast<jstring>(env->GetObjectArrayElement(values, index));
+        if (clear_pending_exception(env)) {
+            return {};
+        }
+        if (name != nullptr) {
+            headers.push_back({
+                .name = to_string(env, name),
+                .value = to_string(env, value),
+            });
+        }
+        if (name != nullptr) {
+            env->DeleteLocalRef(name);
+        }
+        if (value != nullptr) {
+            env->DeleteLocalRef(value);
+        }
+    }
+    return headers;
 }
 
 // Instance method resolved on the SDL activity.
@@ -141,5 +227,60 @@ inline jclass find_app_class(JNIEnv* env, const char* name) {
     }
     return loaded;
 }
+
+class AppClass {
+public:
+    explicit AppClass(const char* name) : m_name{name} {}
+
+    jclass get(JNIEnv* env) {
+        std::lock_guard lock{m_mutex};
+        if (m_class != nullptr) {
+            return m_class;
+        }
+        jclass local = find_app_class(env, m_name);
+        if (local == nullptr) {
+            return nullptr;
+        }
+        m_class = static_cast<jclass>(env->NewGlobalRef(local));
+        if (clear_pending_exception(env)) {
+            m_class = nullptr;
+        }
+        return m_class;
+    }
+
+private:
+    const char* m_name;
+    std::mutex m_mutex;
+    jclass m_class = nullptr;
+};
+
+class StaticMethod {
+public:
+    StaticMethod(AppClass& owner, const char* name, const char* signature)
+        : m_owner{owner}, m_name{name}, m_signature{signature} {}
+
+    jmethodID get(JNIEnv* env) {
+        std::lock_guard lock{m_mutex};
+        if (m_method != nullptr) {
+            return m_method;
+        }
+        jclass owner = m_owner.get(env);
+        if (owner == nullptr) {
+            return nullptr;
+        }
+        m_method = env->GetStaticMethodID(owner, m_name, m_signature);
+        if (clear_pending_exception(env)) {
+            m_method = nullptr;
+        }
+        return m_method;
+    }
+
+private:
+    AppClass& m_owner;
+    const char* m_name;
+    const char* m_signature;
+    std::mutex m_mutex;
+    jmethodID m_method = nullptr;
+};
 
 }  // namespace borealis::jni

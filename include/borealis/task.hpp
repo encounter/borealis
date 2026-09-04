@@ -31,6 +31,7 @@ struct TaskSignals {
 };
 
 bool submit_task(std::function<void(TaskSignals*)> function, std::shared_ptr<TaskSignals> signals);
+void register_shutdown_hook(std::function<void()> hook);
 
 enum class TaskStateStatus {
     Pending,

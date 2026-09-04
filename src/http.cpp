@@ -1,5 +1,4 @@
 #include "borealis/http.hpp"
-
 #include "http_internal.hpp"
 
 #include <exception>
@@ -12,7 +11,7 @@ Result validate_request(const Request& request) {
     if (request.url.empty()) {
         return {
             .error = Error::InvalidUrl,
-            .message = "URL is empty",
+            .message = "Invalid URL",
         };
     }
     if (!request.url.starts_with("https://")) {

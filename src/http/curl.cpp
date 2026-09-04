@@ -1,39 +1,23 @@
 #include "borealis/http.hpp"
 
 #include "../http_internal.hpp"
+#include "borealis/log.hpp"
+#include "curl_common.hpp"
 
 #include <curl/curl.h>
 
 #include <algorithm>
-#include <charconv>
 #include <chrono>
 #include <limits>
-#include <mutex>
 #include <span>
 #include <string_view>
 
+namespace {
+constexpr borealis::Log Log{"borealis::http"};
+}
+
 namespace borealis::http {
 namespace {
-
-struct CurlHeaders {
-    curl_slist* list = nullptr;
-
-    ~CurlHeaders() {
-        if (list != nullptr) {
-            curl_slist_free_all(list);
-        }
-    }
-
-    bool append(const std::string& header) {
-        curl_slist* next = curl_slist_append(list, header.c_str());
-        if (next == nullptr) {
-            return false;
-        }
-        list = next;
-        return true;
-    }
-};
-
 struct CurlContext {
     detail::TransportObserver* observer = nullptr;
     borealis::detail::TaskSignals* signals = nullptr;
@@ -47,8 +31,17 @@ struct CurlContext {
     bool timedOut = false;
 };
 
-void initialize_curl() {
-    curl_global_init(CURL_GLOBAL_DEFAULT);
+template <typename Fn>
+size_t guarded_callback(CurlContext& context, std::string_view operation, Fn&& fn) noexcept {
+    try {
+        return fn();
+    } catch (const std::exception& exception) {
+        ::Log.error("{}: {}", operation, exception.what());
+    } catch (...) {
+        ::Log.error("{}: unknown exception", operation);
+    }
+    context.callbackFailed = true;
+    return 0;
 }
 
 bool is_redirect_status(int status) {
@@ -71,12 +64,9 @@ size_t write_body_impl(char* ptr, size_t size, size_t nmemb, void* userdata) {
 }
 
 size_t write_body(char* ptr, size_t size, size_t nmemb, void* userdata) noexcept {
-    try {
-        return write_body_impl(ptr, size, nmemb, userdata);
-    } catch (...) {
-        static_cast<CurlContext*>(userdata)->callbackFailed = true;
-        return 0;
-    }
+    auto& context = *static_cast<CurlContext*>(userdata);
+    return guarded_callback(
+        context, __func__, [&] { return write_body_impl(ptr, size, nmemb, userdata); });
 }
 
 size_t write_header_impl(char* ptr, size_t size, size_t nmemb, void* userdata) {
@@ -85,11 +75,7 @@ size_t write_header_impl(char* ptr, size_t size, size_t nmemb, void* userdata) {
     if (line.starts_with("HTTP/")) {
         context->headers.clear();
         context->currentStatus = 0;
-        const size_t statusStart = line.find(' ');
-        if (statusStart != std::string_view::npos) {
-            std::from_chars(
-                line.data() + statusStart + 1, line.data() + line.size(), context->currentStatus);
-        }
+        context->currentStatus = borealis::detail::curl::status_code(line);
         context->lastBytesRead = 0;
         context->lastBytesWritten = 0;
         context->activity.start_response();
@@ -110,23 +96,16 @@ size_t write_header_impl(char* ptr, size_t size, size_t nmemb, void* userdata) {
         return size * nmemb;
     }
 
-    const size_t colon = line.find(':');
-    if (colon != std::string_view::npos) {
-        context->headers.push_back({
-            .name = std::string{line.substr(0, colon)},
-            .value = detail::trim_header_value(line.substr(colon + 1)),
-        });
+    if (auto header = borealis::detail::curl::header(line)) {
+        context->headers.emplace_back(std::move(*header));
     }
     return size * nmemb;
 }
 
 size_t write_header(char* ptr, size_t size, size_t nmemb, void* userdata) noexcept {
-    try {
-        return write_header_impl(ptr, size, nmemb, userdata);
-    } catch (...) {
-        static_cast<CurlContext*>(userdata)->callbackFailed = true;
-        return 0;
-    }
+    auto& context = *static_cast<CurlContext*>(userdata);
+    return guarded_callback(
+        context, __func__, [&] { return write_header_impl(ptr, size, nmemb, userdata); });
 }
 
 int transfer_progress(
@@ -175,19 +154,6 @@ Error map_curl_error(CURLcode code, const CurlContext& context) {
     }
 }
 
-long timeout_ms(std::chrono::milliseconds timeout) {
-    return static_cast<long>(std::min<std::chrono::milliseconds::rep>(
-        std::max<std::chrono::milliseconds::rep>(1, timeout.count()),
-        std::numeric_limits<long>::max()));
-}
-
-long timeout_seconds(std::chrono::milliseconds timeout) {
-    const auto milliseconds = std::max<std::chrono::milliseconds::rep>(1, timeout.count());
-    const auto seconds = milliseconds / 1000 + (milliseconds % 1000 != 0 ? 1 : 0);
-    return static_cast<long>(
-        std::min<std::chrono::milliseconds::rep>(seconds, std::numeric_limits<long>::max()));
-}
-
 }  // namespace
 
 bool available() noexcept {
@@ -203,8 +169,7 @@ const char* backend_name() noexcept {
 }
 
 detail::TransportResult detail::send_request(const TransportRequest& request) {
-    static std::once_flag initFlag;
-    std::call_once(initFlag, initialize_curl);
+    borealis::detail::curl::initialize();
 
     CURL* curl = curl_easy_init();
     if (curl == nullptr) {
@@ -214,7 +179,7 @@ detail::TransportResult detail::send_request(const TransportRequest& request) {
         };
     }
 
-    CurlHeaders headers;
+    borealis::detail::curl::Headers headers;
     for (const Header& header : request.headers) {
         if (!headers.append(header.name + ": " + header.value)) {
             curl_easy_cleanup(curl);
@@ -265,16 +230,16 @@ detail::TransportResult detail::send_request(const TransportRequest& request) {
         curl_easy_setopt(
             curl, CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(request.body.size()));
     }
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers.list);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers.get());
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 20L);
-    curl_easy_setopt(
-        curl, CURLOPT_CONNECTTIMEOUT_MS, timeout_ms(request.deadline->connect_timeout()));
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS,
+        borealis::detail::curl::timeout_ms(request.deadline->connect_timeout()));
     curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
-    curl_easy_setopt(
-        curl, CURLOPT_LOW_SPEED_TIME, timeout_seconds(request.deadline->idle_timeout()));
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME,
+        borealis::detail::curl::timeout_seconds(request.deadline->idle_timeout()));
     if (const auto remaining = request.deadline->remaining_total()) {
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_ms(*remaining));
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, borealis::detail::curl::timeout_ms(*remaining));
     }
     if (request.allowCompression) {
         curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");

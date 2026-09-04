@@ -3,6 +3,11 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <future>
+#include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -118,6 +123,44 @@ TEST(Task, ShutdownDrainsAndAllowsLazyRestart) {
     }
     EXPECT_EQ(restarted.try_take(), 2);
     borealis::shutdown();
+}
+
+TEST(Task, WorkerCanRegisterHookDuringShutdown) {
+    struct Coordination {
+        std::mutex mutex;
+        std::condition_variable changed;
+        bool shutdownHookRunning = false;
+        bool registrationStarting = false;
+    };
+
+    auto coordination = std::make_shared<Coordination>();
+    auto firstRun = std::make_shared<std::atomic_bool>(true);
+    borealis::detail::register_shutdown_hook([coordination, firstRun] {
+        if (!firstRun->exchange(false, std::memory_order_acq_rel)) {
+            return;
+        }
+        std::unique_lock lock{coordination->mutex};
+        coordination->shutdownHookRunning = true;
+        coordination->changed.notify_all();
+        coordination->changed.wait(lock, [&] { return coordination->registrationStarting; });
+    });
+
+    auto registration = borealis::spawn([coordination](borealis::TaskContext&) {
+        {
+            std::unique_lock lock{coordination->mutex};
+            coordination->changed.wait(lock, [&] { return coordination->shutdownHookRunning; });
+            coordination->registrationStarting = true;
+            coordination->changed.notify_all();
+        }
+        borealis::detail::register_shutdown_hook([] {});
+        return 1;
+    });
+    auto shutdownFuture = std::async(std::launch::async, [] { borealis::shutdown(); });
+
+    EXPECT_EQ(shutdownFuture.wait_for(std::chrono::seconds{2}), std::future_status::ready);
+    shutdownFuture.get();
+    ASSERT_TRUE(registration.ready());
+    EXPECT_EQ(registration.try_take(), 1);
 }
 
 }  // namespace

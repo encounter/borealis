@@ -133,6 +133,19 @@ TEST_F(HttpTest, PlaintextSchemeRejected) {
     }
 }
 
+TEST_F(HttpTest, PreservesAcceptedHttpsUrlForms) {
+    for (const char* url :
+        {
+            "https://token@example.com/v1",
+            "https://example.com/My Mod.dusk",
+            "https://example.com/releases#latest",
+            "https://example.com\\path",
+        })
+    {
+        EXPECT_EQ(http::detail::validate_request({.url = url}).error, http::Error::None) << url;
+    }
+}
+
 TEST_F(HttpTest, AsyncResultCanBeTakenOnce) {
     borealis::Task<http::Result> task = http::start({});
     ASSERT_TRUE(task);

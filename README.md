@@ -20,10 +20,12 @@ Supported platforms: Windows, Linux, Android, macOS, iOS and tvOS.
 | `borealis::http`         | Asynchronous HTTPS client (HTTP/2, TLS 1.2+)                            | ✅       |
 | `borealis::io`           | File I/O + paths, bookmarks (iOS), and document URIs (Android)          | ✅       |
 | `borealis::log`          | fmt-based logging + sinks (console, rotating file, logcat, ring buffer) | ✅       |
+| `borealis::net`          | TCP, UDP, and asynchronous DNS                                          | ✅       |
 | `borealis::presentation` | Android frame-rate configuration                                        | ✅       |
 | `borealis::sentry`       | Optional sentry-native/crashpad integration and consent state           | ✅       |
 | `borealis::task`         | Shared async task pool with cancellation and progress                   | ✅       |
 | `borealis::update`       | Update checks via GitHub releases                                       | ✅       |
+| `borealis::ws`           | WebSocket client over HTTPS                                             | ✅       |
 
 Borealis also provides an [Android platform layer](platforms/android/README.md) that integrates SDL, Aurora and provides
 Java-side support for Borealis modules.
@@ -97,6 +99,50 @@ if (auto result = check.try_take();
 ```
 
 `Status::Disabled` indicates the build was compiled without an available HTTP backend.
+
+### TCP, UDP, and DNS
+
+`borealis::net` provides non-blocking TCP clients and listeners, UDP sockets, and asynchronous
+DNS. A `Context` manages its sockets and event queue, which can be polled from any thread.
+
+```cpp
+#include <borealis/net.hpp>
+
+borealis::net::Context network;
+const auto stream = network.connect("tcp://127.0.0.1:34197");
+
+borealis::net::Event event;
+while (network.poll(event)) {
+    if (event.id == stream && event.kind == borealis::net::Event::Kind::StreamData) {
+        consume(event.id, event.data);
+    }
+}
+```
+
+Endpoints use `tcp://host:port` or `udp://host:port`.
+
+### WebSocket connections
+
+`borealis::ws` provides asynchronous WebSocket client connections. Poll each connection for `Open`,
+`Message`, and `Closed` events.
+
+```cpp
+#include <borealis/ws.hpp>
+
+auto connection = borealis::ws::connect({
+    .url = "wss://example.com/events",
+    .protocols = {"events.v1"},
+});
+
+borealis::ws::Event event;
+while (connection.poll(event)) {
+    if (event.kind == borealis::ws::Event::Kind::Message) {
+        consume(event.messageKind, event.data);
+    }
+}
+```
+
+Only `wss://` is accepted by default.
 
 ### Data directories
 

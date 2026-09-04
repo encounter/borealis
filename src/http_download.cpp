@@ -1,3 +1,4 @@
+#include "http/header_common.hpp"
 #include "http_internal.hpp"
 
 #include <nlohmann/json.hpp>
@@ -13,41 +14,9 @@ namespace {
 
 constexpr int MetadataVersion = 1;
 
-bool ascii_iequals(std::string_view lhs, std::string_view rhs) {
-    if (lhs.size() != rhs.size()) {
-        return false;
-    }
-    for (size_t i = 0; i < lhs.size(); ++i) {
-        char lhsChar = lhs[i];
-        char rhsChar = rhs[i];
-        if (lhsChar >= 'A' && lhsChar <= 'Z') {
-            lhsChar = static_cast<char>(lhsChar - 'A' + 'a');
-        }
-        if (rhsChar >= 'A' && rhsChar <= 'Z') {
-            rhsChar = static_cast<char>(rhsChar - 'A' + 'a');
-        }
-        if (lhsChar != rhsChar) {
-            return false;
-        }
-    }
-    return true;
-}
-
-std::string_view trim(std::string_view value) {
-    while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
-        value.remove_prefix(1);
-    }
-    while (!value.empty() && (value.back() == ' ' || value.back() == '\t' || value.back() == '\r' ||
-                                 value.back() == '\n'))
-    {
-        value.remove_suffix(1);
-    }
-    return value;
-}
-
 const std::string* header_value(const std::vector<Header>& headers, std::string_view name) {
     for (const Header& header : headers) {
-        if (ascii_iequals(header.name, name)) {
+        if (borealis::detail::ascii_iequals(header.name, name)) {
             return &header.value;
         }
     }
@@ -55,7 +24,7 @@ const std::string* header_value(const std::vector<Header>& headers, std::string_
 }
 
 bool parse_unsigned(std::string_view value, std::uint64_t& result) {
-    value = trim(value);
+    value = borealis::detail::headers::trim(value);
     const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), result);
     return error == std::errc{} && end == value.data() + value.size();
 }
@@ -76,9 +45,11 @@ struct ContentRange {
 };
 
 std::optional<ContentRange> parse_content_range(std::string_view value) {
-    value = trim(value);
+    value = borealis::detail::headers::trim(value);
     constexpr std::string_view Prefix = "bytes ";
-    if (value.size() < Prefix.size() || !ascii_iequals(value.substr(0, Prefix.size()), Prefix)) {
+    if (value.size() < Prefix.size() ||
+        !borealis::detail::ascii_iequals(value.substr(0, Prefix.size()), Prefix))
+    {
         return std::nullopt;
     }
     value.remove_prefix(Prefix.size());
@@ -120,11 +91,12 @@ std::optional<ContentRange> parse_content_range(std::string_view value) {
 
 bool identity_encoded(const Response& response) {
     const std::string* value = header_value(response.headers, "Content-Encoding");
-    return value == nullptr || ascii_iequals(trim(*value), "identity");
+    return value == nullptr ||
+           borealis::detail::ascii_iequals(borealis::detail::headers::trim(*value), "identity");
 }
 
 bool strong_etag(std::string_view value) {
-    value = trim(value);
+    value = borealis::detail::headers::trim(value);
     return value.size() >= 2 && value.front() == '"' && value.back() == '"';
 }
 
@@ -132,22 +104,23 @@ std::pair<std::string, std::string> response_validator(const Response& response)
     if (const std::string* etag = header_value(response.headers, "ETag");
         etag != nullptr && strong_etag(*etag))
     {
-        return {"ETag", std::string{trim(*etag)}};
+        return {"ETag", std::string{borealis::detail::headers::trim(*etag)}};
     }
     if (const std::string* modified = header_value(response.headers, "Last-Modified");
-        modified != nullptr && !trim(*modified).empty())
+        modified != nullptr && !borealis::detail::headers::trim(*modified).empty())
     {
-        return {"Last-Modified", std::string{trim(*modified)}};
+        return {"Last-Modified", std::string{borealis::detail::headers::trim(*modified)}};
     }
     return {};
 }
 
 bool header_is(const Request& request, std::string_view name, std::string_view value = {}) {
     for (const Header& header : request.headers) {
-        if (!ascii_iequals(header.name, name)) {
+        if (!borealis::detail::ascii_iequals(header.name, name)) {
             continue;
         }
-        return value.empty() || ascii_iequals(trim(header.value), value);
+        return value.empty() || borealis::detail::ascii_iequals(
+                                    borealis::detail::headers::trim(header.value), value);
     }
     return false;
 }
@@ -215,8 +188,13 @@ bool write_metadata(const DownloadPlan& plan, const std::string& validatorName,
         {"version", MetadataVersion},
         {"url", plan.requestUrl},
         {"encoding", "identity"},
-        {"validator", {{"type", validatorName == "ETag" ? "etag" : "last-modified"},
-                          {"value", validatorValue}}},
+        {
+            "validator",
+            {
+                {"type", validatorName == "ETag" ? "etag" : "last-modified"},
+                {"value", validatorValue},
+            },
+        },
     };
     if (expectedSize) {
         metadata["expectedSize"] = *expectedSize;
@@ -252,10 +230,6 @@ std::chrono::milliseconds positive_timeout(std::chrono::milliseconds timeout) {
 }
 
 }  // namespace
-
-std::string trim_header_value(std::string_view value) {
-    return std::string{trim(value)};
-}
 
 std::filesystem::path resume_metadata_path(const std::filesystem::path& destination) {
     std::filesystem::path result = destination;
@@ -339,7 +313,8 @@ DownloadDecision evaluate_download_response(
         const std::string* value = header_value(response.headers, "Content-Range");
         const auto range = value == nullptr ? std::nullopt : parse_content_range(*value);
         if (const std::string* validator = header_value(response.headers, plan.validatorName);
-            validator != nullptr && trim(*validator) != plan.validatorValue)
+            validator != nullptr &&
+            borealis::detail::headers::trim(*validator) != plan.validatorValue)
         {
             return {
                 .action = DownloadAction::Restart,
@@ -387,7 +362,7 @@ DownloadDecision evaluate_download_response(
     }
 
     if (const std::string* validator = header_value(response.headers, plan.validatorName);
-        validator != nullptr && trim(*validator) != plan.validatorValue)
+        validator != nullptr && borealis::detail::headers::trim(*validator) != plan.validatorValue)
     {
         return {
             .action = DownloadAction::Restart,

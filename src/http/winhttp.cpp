@@ -1,15 +1,8 @@
 #include "borealis/http.hpp"
 
 #include "../http_internal.hpp"
-
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <Windows.h>
-#include <winhttp.h>
+#include "borealis/log.hpp"
+#include "winhttp_common.hpp"
 
 #include <algorithm>
 #include <array>
@@ -22,166 +15,27 @@
 #include <utility>
 #include <vector>
 
+namespace {
+constexpr borealis::Log Log{"borealis::http"};
+}
+
 namespace borealis::http {
 namespace {
-
-struct WinHttpHandle {
-    HINTERNET handle = nullptr;
-
-    WinHttpHandle() = default;
-    explicit WinHttpHandle(HINTERNET value) : handle{value} {}
-    WinHttpHandle(const WinHttpHandle&) = delete;
-    WinHttpHandle& operator=(const WinHttpHandle&) = delete;
-
-    ~WinHttpHandle() {
-        if (handle != nullptr) {
-            WinHttpCloseHandle(handle);
-        }
-    }
-
-    HINTERNET release() noexcept {
-        HINTERNET value = handle;
-        handle = nullptr;
-        return value;
-    }
-
-    operator HINTERNET() const { return handle; }
-};
-
-bool configure_secure_protocols(HINTERNET session) {
-    DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
-#ifdef WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3
-    protocols |= WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
-    if (WinHttpSetOption(session, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof(protocols))) {
-        return true;
-    }
-    protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
-#endif
-    return WinHttpSetOption(
-               session, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof(protocols)) != FALSE;
-}
-
-std::wstring utf8_to_wide(std::string_view value) {
-    if (value.empty()) {
-        return {};
-    }
-
-    const int required = MultiByteToWideChar(
-        CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), nullptr, 0);
-    if (required <= 0) {
-        return {};
-    }
-
-    std::wstring result(static_cast<size_t>(required), L'\0');
-    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()),
-        result.data(), required);
-    return result;
-}
-
-std::string wide_to_utf8(std::wstring_view value) {
-    if (value.empty()) {
-        return {};
-    }
-
-    const int required = WideCharToMultiByte(
-        CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
-    if (required <= 0) {
-        return {};
-    }
-
-    std::string result(static_cast<size_t>(required), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), result.data(),
-        required, nullptr, nullptr);
-    return result;
-}
-
-DWORD timeout_ms(std::chrono::milliseconds timeout) {
-    const auto count = std::max<std::chrono::milliseconds::rep>(1, timeout.count());
-    return static_cast<DWORD>(
-        std::min<std::chrono::milliseconds::rep>(count, std::numeric_limits<int>::max()));
-}
+namespace winhttp = borealis::detail::winhttp;
 
 Error map_winhttp_error(DWORD error) {
-    switch (error) {
-    case ERROR_WINHTTP_TIMEOUT:
-        return Error::Timeout;
-    case ERROR_WINHTTP_OPERATION_CANCELLED:
-        return Error::Canceled;
-    case ERROR_WINHTTP_INVALID_URL:
-    case ERROR_WINHTTP_UNRECOGNIZED_SCHEME:
-        return Error::InvalidUrl;
-    default:
-        return Error::Network;
-    }
+    return borealis::detail::winhttp::map_error<Error>(error);
 }
 
 detail::TransportResult fail_from_error(DWORD error, const char* message) {
     return {
         .error = map_winhttp_error(error),
-        .message = std::string{message} + " (" + std::to_string(error) + ")",
+        .message = borealis::detail::winhttp::error_message(error, message),
     };
 }
 
 detail::TransportResult fail_from_last_error(const char* message) {
     return fail_from_error(GetLastError(), message);
-}
-
-void parse_headers(std::wstring_view rawHeaders, std::vector<Header>& headers) {
-    size_t start = 0;
-    bool firstLine = true;
-    while (start < rawHeaders.size()) {
-        size_t end = rawHeaders.find(L"\r\n", start);
-        if (end == std::wstring_view::npos) {
-            end = rawHeaders.size();
-        }
-
-        const std::wstring_view line = rawHeaders.substr(start, end - start);
-        if (!line.empty() && !firstLine) {
-            const size_t colon = line.find(L':');
-            if (colon != std::wstring_view::npos) {
-                headers.push_back({
-                    .name = wide_to_utf8(line.substr(0, colon)),
-                    .value = detail::trim_header_value(wide_to_utf8(line.substr(colon + 1))),
-                });
-            }
-        }
-        firstLine = false;
-
-        if (end == rawHeaders.size()) {
-            break;
-        }
-        start = end + 2;
-    }
-}
-
-bool read_response(HINTERNET request, int& status, std::vector<Header>& headers) {
-    DWORD statusCode = 0;
-    DWORD statusCodeSize = sizeof(statusCode);
-    if (!WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-            WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusCodeSize, WINHTTP_NO_HEADER_INDEX))
-    {
-        return false;
-    }
-    status = static_cast<int>(statusCode);
-
-    DWORD headerBytes = 0;
-    WinHttpQueryHeaders(request, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX,
-        WINHTTP_NO_OUTPUT_BUFFER, &headerBytes, WINHTTP_NO_HEADER_INDEX);
-    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
-        return false;
-    }
-
-    std::wstring rawHeaders(headerBytes / sizeof(wchar_t), L'\0');
-    if (!WinHttpQueryHeaders(request, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX,
-            rawHeaders.data(), &headerBytes, WINHTTP_NO_HEADER_INDEX))
-    {
-        return false;
-    }
-    if (!rawHeaders.empty() && rawHeaders.back() == L'\0') {
-        rawHeaders.pop_back();
-    }
-    parse_headers(rawHeaders, headers);
-    return true;
 }
 
 class AsyncRequest {
@@ -248,7 +102,11 @@ public:
             default:
                 break;
             }
+        } catch (const std::exception& exception) {
+            ::Log.error("{}: {}", __func__, exception.what());
+            fail_unexpected_callback();
         } catch (...) {
+            ::Log.error("{}: unknown exception", __func__);
             fail_unexpected_callback();
         }
     }
@@ -258,7 +116,7 @@ private:
         m_activity.start_response();
         int status = 0;
         std::vector<Header> headers;
-        if (!read_response(requestHandle, status, headers)) {
+        if (!winhttp::query_response(requestHandle, status, headers)) {
             fail_from_last_error_locked("Failed to read response headers");
             return;
         }
@@ -367,21 +225,20 @@ private:
         fail_from_error_locked(GetLastError(), message);
     }
 
-    void fail_unexpected_callback() noexcept {
-        try {
-            std::lock_guard lock{m_mutex};
-            if (!m_complete) {
-                m_error = Error::Network;
-                try {
-                    m_message = "WinHTTP callback failed";
-                } catch (...) {
-                    m_message.clear();
-                }
-                complete_locked();
+    void fail_unexpected_callback() noexcept try {
+        std::lock_guard lock{m_mutex};
+        if (!m_complete) {
+            m_error = Error::Network;
+            try {
+                m_message = "WinHTTP callback failed";
+            } catch (const std::exception& exception) {
+                ::Log.error("{}: {}", __func__, exception.what());
+                m_message.clear();
             }
-        } catch (...) {
+            complete_locked();
         }
     }
+    BOREALIS_CATCH()
 
     detail::Deadline& m_deadline;
     detail::TransportObserver& m_observer;
@@ -421,7 +278,7 @@ const char* backend_name() noexcept {
 }
 
 detail::TransportResult detail::send_request(const TransportRequest& request) {
-    std::wstring wideUrl = utf8_to_wide(request.url);
+    std::wstring wideUrl = winhttp::utf8_to_wide(request.url);
     if (wideUrl.empty()) {
         return {
             .error = Error::InvalidUrl,
@@ -429,51 +286,34 @@ detail::TransportResult detail::send_request(const TransportRequest& request) {
         };
     }
 
-    URL_COMPONENTS components{};
-    components.dwStructSize = sizeof(components);
-    components.dwSchemeLength = static_cast<DWORD>(-1);
-    components.dwHostNameLength = static_cast<DWORD>(-1);
-    components.dwUrlPathLength = static_cast<DWORD>(-1);
-    components.dwExtraInfoLength = static_cast<DWORD>(-1);
-    if (!WinHttpCrackUrl(wideUrl.c_str(), static_cast<DWORD>(wideUrl.size()), 0, &components)) {
+    const auto cracked = winhttp::crack_url(wideUrl);
+    if (!cracked) {
         return fail_from_last_error("Failed to parse URL");
     }
-    if (components.nScheme != INTERNET_SCHEME_HTTPS) {
+    if (!cracked->secure) {
         return {
             .error = Error::UnsupportedScheme,
             .message = "Only https:// URLs are supported",
         };
     }
 
-    const std::wstring host{components.lpszHostName, components.dwHostNameLength};
-    std::wstring path;
-    if (components.lpszUrlPath != nullptr && components.dwUrlPathLength > 0) {
-        path.assign(components.lpszUrlPath, components.dwUrlPathLength);
-    }
-    if (components.lpszExtraInfo != nullptr && components.dwExtraInfoLength > 0) {
-        path.append(components.lpszExtraInfo, components.dwExtraInfoLength);
-    }
-    if (path.empty()) {
-        path = L"/";
-    }
-
-    WinHttpHandle session{WinHttpOpen(L"borealis", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+    winhttp::Handle session{WinHttpOpen(L"borealis", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, WINHTTP_FLAG_ASYNC)};
-    if (session.handle == nullptr) {
+    if (session.get() == nullptr) {
         return fail_from_last_error("Failed to create WinHTTP session");
     }
-    if (!configure_secure_protocols(session)) {
+    if (!winhttp::configure_secure_protocols(session)) {
         return fail_from_last_error("Failed to require TLS 1.2 or newer");
     }
 
     const DWORD connectTimeout =
-        timeout_ms(request.deadline->bounded_timeout(request.deadline->connect_timeout()));
+        winhttp::timeout_ms(request.deadline->bounded_timeout(request.deadline->connect_timeout()));
     const DWORD idleTimeout =
-        timeout_ms(request.deadline->bounded_timeout(request.deadline->idle_timeout()));
+        winhttp::timeout_ms(request.deadline->bounded_timeout(request.deadline->idle_timeout()));
     WinHttpSetTimeouts(session, connectTimeout, connectTimeout, idleTimeout, idleTimeout);
 
-    WinHttpHandle connection{WinHttpConnect(session, host.c_str(), components.nPort, 0)};
-    if (connection.handle == nullptr) {
+    winhttp::Handle connection{WinHttpConnect(session, cracked->host.c_str(), cracked->port, 0)};
+    if (connection.get() == nullptr) {
         return fail_from_last_error("Failed to connect");
     }
 
@@ -486,10 +326,11 @@ detail::TransportResult detail::send_request(const TransportRequest& request) {
         };
     }
 
-    const std::wstring method = utf8_to_wide(detail::method_name(request.method));
-    WinHttpHandle httpRequest{WinHttpOpenRequest(connection, method.c_str(), path.c_str(), nullptr,
-        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE)};
-    if (httpRequest.handle == nullptr) {
+    const std::wstring method = winhttp::utf8_to_wide(detail::method_name(request.method));
+    winhttp::Handle httpRequest{
+        WinHttpOpenRequest(connection, method.c_str(), cracked->path.c_str(), nullptr,
+            WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE)};
+    if (httpRequest.get() == nullptr) {
         return fail_from_last_error("Failed to create request");
     }
 
@@ -511,7 +352,7 @@ detail::TransportResult detail::send_request(const TransportRequest& request) {
     }
 
     for (const Header& header : request.headers) {
-        const std::wstring wideHeader = utf8_to_wide(header.name + ": " + header.value);
+        const std::wstring wideHeader = winhttp::utf8_to_wide(header.name + ": " + header.value);
         if (wideHeader.empty()) {
             return {
                 .error = Error::InvalidUrl,
@@ -533,7 +374,7 @@ detail::TransportResult detail::send_request(const TransportRequest& request) {
     }
 
     AsyncRequest asyncRequest{
-        *request.deadline, *request.observer, request.signals, httpRequest.handle};
+        *request.deadline, *request.observer, request.signals, httpRequest.get()};
     DWORD_PTR context = reinterpret_cast<DWORD_PTR>(&asyncRequest);
     if (!WinHttpSetOption(httpRequest, WINHTTP_OPTION_CONTEXT_VALUE, &context, sizeof(context))) {
         return fail_from_last_error("Failed to set WinHTTP request context");

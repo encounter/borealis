@@ -17,6 +17,8 @@
 
 namespace borealis::http::detail {
 
+Result validate_request(const Request& request);
+
 constexpr std::string_view method_name(Method method) noexcept {
     switch (method) {
     case Method::Get:
@@ -168,8 +170,6 @@ TransportResult send_request(const TransportRequest& request);
 Result perform(
     const Request& request, borealis::detail::TaskSignals* signals, const Transport& transport);
 Result perform(const Request& request, borealis::detail::TaskSignals* signals);
-
-std::string trim_header_value(std::string_view value);
 
 std::filesystem::path resume_metadata_path(const std::filesystem::path& destination);
 DownloadPlan prepare_download(const Request& request);
