@@ -133,7 +133,7 @@ TEST(NetContextTest, TcpRoundTripAndGracefulClose) {
 
 TEST(NetContextTest, PeerHalfCloseDrainsAcceptedSends) {
     Context serverContext;
-    Context clientContext{{.maxQueuedBytes = 4096, .maxQueuedEvents = 1}};
+    Context clientContext{{.maxQueuedBytes = 64 * 1024, .maxQueuedEvents = 1}};
     ListenOptions listenOptions;
     listenOptions.accepted.maxSendQueueBytes = 8 * 1024 * 1024;
     const auto listener = serverContext.listen("tcp://127.0.0.1:0", listenOptions);

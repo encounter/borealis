@@ -42,6 +42,7 @@ jobs:
               -DBOREALIS_ENABLE_HTTP=OFF
               -DBOREALIS_ENABLE_IO=OFF
               -DBOREALIS_ENABLE_UPDATE=OFF
+              -DBOREALIS_ENABLE_WEBSOCKET=OFF
               -DBOREALIS_HTTP_BACKEND=none
           - name: macOS AppleClang arm64
             runner: macos-latest
