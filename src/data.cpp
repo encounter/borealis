@@ -956,14 +956,18 @@ Status Manager::reset_data_path() {
 }
 
 Status Manager::open_active_data_path() const {
+    return open_folder(active_data_path());
+}
+
+Status Manager::open_folder(const std::filesystem::path& directory) const {
     if (!capabilities().canOpenFolder) {
-        return {.code = ErrorCode::Unsupported, .path = active_data_path()};
+        return {.code = ErrorCode::Unsupported, .path = directory};
     }
-    const auto path = normalized_display_path(active_data_path());
+    const auto path = normalized_display_path(directory);
     const std::string url = file_url_from_path(path);
     if (!SDL_OpenURL(url.c_str())) {
         Log.warn(
-            "Failed to open data folder '{}': {}", io::fs_path_to_string(path), SDL_GetError());
+            "Failed to open folder '{}': {}", io::fs_path_to_string(path), SDL_GetError());
         return {.code = ErrorCode::OpenFolderFailed, .path = path};
     }
     return {};

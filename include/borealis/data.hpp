@@ -118,6 +118,8 @@ public:
     Status set_portable_data_path();
     Status reset_data_path();
     Status open_active_data_path() const;
+    /** Opens a directory in the system file browser. */
+    Status open_folder(const std::filesystem::path& path) const;
 
     /** Resolves a path relative to the executable directory. */
     std::filesystem::path base_path_relative(const std::filesystem::path& path = {}) const;

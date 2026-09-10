@@ -93,25 +93,35 @@ TEST(Update, ParseRejectsMalformed) {
 }
 
 TEST(Update, GitDescribeSuffixes) {
-    // Git-describe distance does not make a build older than its tag.
+    // Git-describe builds follow their tag in distance order.
     EXPECT_TRUE(parsed("v1.2.3-4").prerelease.empty());
-    EXPECT_EQ(compare("v1.2.3-4", "v1.2.3"), 0);
-    EXPECT_EQ(compare("v1.2.3-4-dirty", "v1.2.3"), 0);
+    EXPECT_EQ(compare("v1.2.3-4", "v1.2.3"), 1);
+    EXPECT_EQ(compare("v1.2.3-4-dirty", "v1.2.3"), 1);
 
     // Prerelease tags retain their prerelease identifiers.
     const Version afterPrerelease = parsed("v1.0.0-rc.1-4");
     EXPECT_EQ(afterPrerelease.prerelease.size(), 2);
     EXPECT_EQ(afterPrerelease.prerelease[1], "1");
-    EXPECT_EQ(compare("v1.0.0-rc.1-4", "v1.0.0-rc.1"), 0);
-    EXPECT_EQ(compare("v1.0.0-rc.1-4-dirty", "v1.0.0-rc.1"), 0);
+    EXPECT_EQ(compare("v1.0.0-rc.1-4", "v1.0.0-rc.1"), 1);
+    EXPECT_EQ(compare("v1.0.0-rc.1-4-dirty", "v1.0.0-rc.1"), 1);
 
     EXPECT_EQ(parsed("v1.0.0-beta").prerelease.size(), 1);
     EXPECT_EQ(parsed("v1.0.0-beta").prerelease[0], "beta");
 
-    // Numeric-only prereleases are indistinguishable from git-describe distance.
-    // Borealis tags do not use them.
     EXPECT_TRUE(parsed("1.0.0-1").prerelease.empty());
-    EXPECT_EQ(compare("1.0.0-1", "1.0.0"), 0);
+    EXPECT_EQ(compare("1.0.0-1", "1.0.0"), 1);
+    EXPECT_EQ(compare("1.2.3-2", "1.2.3-1"), 1);
+    EXPECT_EQ(compare("1.2.3-1", "1.2.3"), 1);
+    EXPECT_EQ(compare("1.2.3-2", "1.2.3-10"), -1);
+    EXPECT_EQ(compare("1.2.3-0", "1.2.3"), 0);
+    EXPECT_EQ(compare("1.2.3-002", "1.2.3-2+build.5"), 0);
+    EXPECT_EQ(compare("1.2.3-2-dirty", "1.2.3-2"), 0);
+    EXPECT_EQ(compare("1.2.3-dirty", "1.2.3"), 0);
+    EXPECT_EQ(compare("1.2.3-rc.1-2", "1.2.3-rc.1-1"), 1);
+    EXPECT_EQ(compare("1.2.3-rc.1-999", "1.2.3"), -1);
+    EXPECT_EQ(compare("1.2.3-99999999999999999999", "1.2.3-2"), 1);
+    EXPECT_TRUE(update::parse_version("2147483647.0.0"));
+    EXPECT_FALSE(update::parse_version("2147483648.0.0"));
 }
 
 TEST(Update, CompareOrdering) {

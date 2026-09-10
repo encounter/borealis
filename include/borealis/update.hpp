@@ -47,6 +47,7 @@ struct Version {
     int minor = 0;
     int patch = 0;
     std::vector<std::string> prerelease;
+    std::string distance;
 };
 
 /**

@@ -75,12 +75,15 @@ bool is_identifier_list(std::string_view value) {
     return !expectingIdentifier;
 }
 
-// Removes git-describe distance: "4" becomes empty and "rc.1-4" becomes "rc.1".
-std::string_view trim_git_describe_suffix(std::string_view value) {
+std::string_view parse_git_describe_suffix(std::string_view value, Version& version) {
+    if (value == "dirty") {
+        return {};
+    }
     if (value.ends_with("-dirty")) {
         value.remove_suffix(6);
     }
     if (is_numeric_identifier(value)) {
+        version.distance = value;
         return {};
     }
 
@@ -89,6 +92,7 @@ std::string_view trim_git_describe_suffix(std::string_view value) {
         value.substr(0, suffixStart).find('.') != std::string_view::npos &&
         is_numeric_identifier(value.substr(suffixStart + 1)))
     {
+        version.distance = value.substr(suffixStart + 1);
         value.remove_suffix(value.size() - suffixStart);
     }
     return value;
@@ -163,7 +167,8 @@ int compare_version(const Version& lhs, const Version& rhs) {
     if (lhs.prerelease.size() != rhs.prerelease.size()) {
         return lhs.prerelease.size() < rhs.prerelease.size() ? -1 : 1;
     }
-    return 0;
+    return compare_identifier(
+        lhs.distance.empty() ? "0" : lhs.distance, rhs.distance.empty() ? "0" : rhs.distance);
 }
 
 std::optional<Version> parse_version(std::string_view value) {
@@ -212,7 +217,7 @@ std::optional<Version> parse_version(std::string_view value) {
         return std::nullopt;
     }
 
-    prerelease = trim_git_describe_suffix(prerelease);
+    prerelease = parse_git_describe_suffix(prerelease, version);
     if (!prerelease.empty()) {
         split_identifiers(prerelease, version.prerelease);
     }
