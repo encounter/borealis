@@ -114,6 +114,11 @@ Status check(std::string_view location);
 /** Returns a short human-readable name for an opaque location. */
 std::string display_name(std::string_view location);
 
+/**
+ * Replaces a path on the same filesystem while existing handles continue to see the old contents.
+ * Windows requires POSIX rename support (Windows 10 build 1607+) and handles opened with
+ * FILE_SHARE_DELETE.
+ */
 bool atomic_replace(const std::filesystem::path& source, const std::filesystem::path& destination,
     std::string& error);
 

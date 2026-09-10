@@ -7,7 +7,9 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstring>
 #include <limits>
+#include <memory>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -643,11 +645,41 @@ PathAccess access_path(std::string_view location) {
 bool atomic_replace(const std::filesystem::path& source, const std::filesystem::path& destination,
     std::string& error) {
 #ifdef _WIN32
-    if (MoveFileExW(source.c_str(), destination.c_str(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == FALSE)
+    std::error_code pathError;
+    const auto target = std::filesystem::absolute(destination, pathError);
+    if (pathError) {
+        error = "Failed to resolve replacement destination: " + pathError.message();
+        return false;
+    }
+    if (target.native().size() >
+        (std::numeric_limits<DWORD>::max() - sizeof(FILE_RENAME_INFO)) / sizeof(wchar_t))
     {
-        error = "Failed to replace file: " +
+        error = "Replacement destination path is too long";
+        return false;
+    }
+    const auto nameSize = target.native().size() * sizeof(wchar_t);
+    const auto infoSize = static_cast<DWORD>(sizeof(FILE_RENAME_INFO) + nameSize);
+    auto storage = std::make_unique<std::byte[]>(infoSize);
+    auto* info = reinterpret_cast<FILE_RENAME_INFO*>(storage.get());
+    info->Flags = FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS;
+    info->FileNameLength = static_cast<DWORD>(nameSize);
+    std::memcpy(info->FileName, target.c_str(), nameSize);
+
+    const auto handle = CreateFileW(source.c_str(), DELETE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        error = "Failed to open replacement file: " +
                 std::system_category().message(static_cast<int>(GetLastError()));
+        return false;
+    }
+    const bool renamed =
+        SetFileInformationByHandle(handle, FileRenameInfoEx, info, infoSize) != FALSE;
+    const auto renameError = renamed ? ERROR_SUCCESS : GetLastError();
+    CloseHandle(handle);
+    if (!renamed) {
+        error = "Failed to replace file: " +
+                std::system_category().message(static_cast<int>(renameError));
         return false;
     }
 #else

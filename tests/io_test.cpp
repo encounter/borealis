@@ -68,6 +68,56 @@ TEST_F(IOTest, RandomAccessFileStaysBoundAcrossRenameAndDelete) {
     EXPECT_EQ(std::string_view(bytes.data(), bytes.size()), "abcd");
 }
 
+TEST_F(IOTest, AtomicReplacePreservesOpenReaders) {
+    const auto destination = directory / "sample.txt";
+    auto original = borealis::io::RandomAccessFile::open(destination);
+    ASSERT_EQ(original.status, borealis::io::Status::Ok) << original.message;
+    const auto staged = directory / "staged.txt";
+    std::ofstream{staged, std::ios::binary} << "replacement";
+
+    std::string message;
+    ASSERT_TRUE(borealis::io::atomic_replace(staged, destination, message)) << message;
+    EXPECT_FALSE(std::filesystem::exists(staged));
+    auto replacement = borealis::io::RandomAccessFile::open(destination);
+    ASSERT_EQ(replacement.status, borealis::io::Status::Ok) << replacement.message;
+    EXPECT_EQ(original.file.size(), 6u);
+    EXPECT_EQ(replacement.file.size(), 11u);
+
+    std::array<char, 4> bytes{};
+    std::error_code error;
+    EXPECT_EQ(original.file.read_at(2, std::as_writable_bytes(std::span{bytes}), error), 4u);
+    EXPECT_FALSE(error);
+    EXPECT_EQ(std::string_view(bytes.data(), bytes.size()), "cdef");
+    EXPECT_EQ(replacement.file.read_at(0, std::as_writable_bytes(std::span{bytes}), error), 4u);
+    EXPECT_FALSE(error);
+    EXPECT_EQ(std::string_view(bytes.data(), bytes.size()), "repl");
+    ASSERT_TRUE(original.file.close());
+    EXPECT_EQ(std::filesystem::file_size(destination), 11u);
+}
+
+TEST_F(IOTest, AtomicReplaceCreatesRelativeUnicodeDestination) {
+    const auto destination = directory / std::filesystem::path{u8"réplacement.txt"};
+    const auto relative = std::filesystem::relative(destination);
+    std::string message;
+    ASSERT_TRUE(borealis::io::atomic_replace(directory / "sample.txt", relative, message)) << message;
+    EXPECT_FALSE(std::filesystem::exists(directory / "sample.txt"));
+    EXPECT_EQ(std::filesystem::file_size(destination), 6u);
+}
+
+TEST_F(IOTest, AtomicReplaceFailurePreservesFiles) {
+    std::string message;
+    const auto source = directory / "sample.txt";
+    EXPECT_FALSE(borealis::io::atomic_replace(directory / "missing.txt", source, message));
+    EXPECT_FALSE(message.empty());
+    EXPECT_EQ(std::filesystem::file_size(source), 6u);
+
+    message.clear();
+    EXPECT_FALSE(borealis::io::atomic_replace(source, directory / "nested", message));
+    EXPECT_FALSE(message.empty());
+    EXPECT_EQ(std::filesystem::file_size(source), 6u);
+    EXPECT_EQ(std::filesystem::file_size(directory / "nested" / "child.txt"), 5u);
+}
+
 TEST_F(IOTest, ChecksListsAndJoins) {
     const auto folder = borealis::io::fs_path_to_string(directory);
     EXPECT_EQ(borealis::io::check(folder), borealis::io::Status::Ok);
