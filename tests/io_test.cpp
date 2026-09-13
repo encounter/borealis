@@ -13,6 +13,7 @@ namespace {
 class IOTest : public testing::Test {
 protected:
     void SetUp() override {
+        originalDirectory = std::filesystem::current_path();
         directory = std::filesystem::temp_directory_path() / "borealis_io_test";
         std::error_code ignored;
         std::filesystem::remove_all(directory, ignored);
@@ -22,10 +23,12 @@ protected:
     }
 
     void TearDown() override {
+        std::filesystem::current_path(originalDirectory);
         std::error_code ignored;
         std::filesystem::remove_all(directory, ignored);
     }
 
+    std::filesystem::path originalDirectory;
     std::filesystem::path directory;
 };
 
@@ -97,7 +100,8 @@ TEST_F(IOTest, AtomicReplacePreservesOpenReaders) {
 
 TEST_F(IOTest, AtomicReplaceCreatesRelativeUnicodeDestination) {
     const auto destination = directory / std::filesystem::path{u8"réplacement.txt"};
-    const auto relative = std::filesystem::relative(destination);
+    std::filesystem::current_path(directory);
+    const auto relative = destination.filename();
     std::string message;
     ASSERT_TRUE(borealis::io::atomic_replace(directory / "sample.txt", relative, message)) << message;
     EXPECT_FALSE(std::filesystem::exists(directory / "sample.txt"));
