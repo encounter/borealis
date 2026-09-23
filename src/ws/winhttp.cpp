@@ -222,7 +222,8 @@ private:
         DWORD_PTR context = reinterpret_cast<DWORD_PTR>(this);
         if (!WinHttpSetOption(request, WINHTTP_OPTION_CONTEXT_VALUE, &context, sizeof(context)) ||
             WinHttpSetStatusCallback(request, status_callback,
-                WINHTTP_CALLBACK_FLAG_ALL_COMPLETIONS | WINHTTP_CALLBACK_FLAG_HANDLES,
+                WINHTTP_CALLBACK_FLAG_ALL_COMPLETIONS | WINHTTP_CALLBACK_FLAG_HANDLES |
+                    WINHTTP_CALLBACK_STATUS_CLOSE_COMPLETE,
                 0) == WINHTTP_INVALID_STATUS_CALLBACK)
         {
             return false;
@@ -328,14 +329,16 @@ private:
         const auto type = message.kind == MessageKind::Text ?
                               WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE :
                               WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE;
+        sendPending = true;
         const DWORD result = WinHttpWebSocketSend(websocket, type,
-            const_cast<char*>(message.data.data()), static_cast<DWORD>(message.data.size()));
+            message.data.empty() ? nullptr : const_cast<char*>(message.data.data()),
+            static_cast<DWORD>(message.data.size()));
         if (result != NO_ERROR) {
+            sendPending = false;
             fail_locked(
                 map_error(result), winhttp::error_message(result, "Failed to send WebSocket data"));
             return;
         }
-        sendPending = true;
     }
 
     void send_complete_locked() {
@@ -362,7 +365,7 @@ private:
         }
         if (peerCloseReceived) {
             const DWORD result = WinHttpWebSocketClose(websocket, peerCloseCode,
-                const_cast<char*>(peerCloseReason.data()),
+                peerCloseReason.empty() ? nullptr : const_cast<char*>(peerCloseReason.data()),
                 static_cast<DWORD>(peerCloseReason.size()));
             if (result != NO_ERROR) {
                 fail_locked(
@@ -372,7 +375,8 @@ private:
             closePending = true;
         } else {
             const DWORD result = WinHttpWebSocketShutdown(websocket, closeCode,
-                const_cast<char*>(closeReason.data()), static_cast<DWORD>(closeReason.size()));
+                closeReason.empty() ? nullptr : const_cast<char*>(closeReason.data()),
+                static_cast<DWORD>(closeReason.size()));
             if (result != NO_ERROR && result != ERROR_IO_PENDING) {
                 fail_locked(map_error(result),
                     winhttp::error_message(result, "Failed to shut down WebSocket"));

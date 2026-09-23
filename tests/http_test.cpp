@@ -233,10 +233,12 @@ TEST_F(HttpTest, LiveRangeResume) {
     EXPECT_EQ(resumeTask.progress().completed, source->response.body.size());
     EXPECT_EQ(resumeTask.progress().total, source->response.body.size());
 
-    std::ifstream input{destination, std::ios::binary};
-    ASSERT_TRUE(input);
-    const std::string downloaded{std::istreambuf_iterator<char>{input}, {}};
-    EXPECT_EQ(downloaded, source->response.body);
+    {
+        std::ifstream input{destination, std::ios::binary};
+        ASSERT_TRUE(input);
+        const std::string downloaded{std::istreambuf_iterator<char>{input}, {}};
+        EXPECT_EQ(downloaded, source->response.body);
+    }
     EXPECT_FALSE(std::filesystem::exists(http::detail::resume_metadata_path(destination)));
 
     {

@@ -90,6 +90,30 @@ TEST(WebSocketBackendTest, EchoesTextAndBinary) {
     EXPECT_EQ(event.code, 1000);
 }
 
+TEST(WebSocketBackendTest, EchoesEmptyMessages) {
+    const auto url = test_url("/echo");
+    if (!url) {
+        GTEST_SKIP() << "Set BOREALIS_WS_TEST_URL to run the backend integration test";
+    }
+    Connection connection = connect(test_options(*url));
+    Event event;
+    ASSERT_TRUE(wait_event(connection, event));
+    ASSERT_EQ(event.kind, Event::Kind::Open) << event.message;
+
+    for (const auto kind : {MessageKind::Text, MessageKind::Binary}) {
+        ASSERT_EQ(connection.send(kind, {}), SendResult::Ok);
+        ASSERT_TRUE(wait_event(connection, event));
+        ASSERT_EQ(event.kind, Event::Kind::Message) << event.message;
+        EXPECT_EQ(event.messageKind, kind);
+        EXPECT_TRUE(event.data.empty());
+    }
+
+    ASSERT_EQ(connection.close(), CloseResult::Ok);
+    ASSERT_TRUE(wait_event(connection, event));
+    EXPECT_EQ(event.kind, Event::Kind::Closed);
+    EXPECT_EQ(event.error, Error::None) << event.message;
+}
+
 TEST(WebSocketBackendTest, SurvivesIdlePastConnectTimeout) {
     const auto url = test_url("/echo");
     if (!url) {
