@@ -55,7 +55,6 @@ if (TARGET borealis_file_select)
     target_link_libraries(borealis_file_select_test PRIVATE borealis::file_select)
     borealis_add_gtest(borealis_file_select_test)
     if (APPLE AND NOT TVOS)
-        enable_language(OBJCXX)
         add_executable(borealis_ios_import_test ios_import_test.mm
                 ../src/file_select/ios_import.mm)
         target_include_directories(borealis_ios_import_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
