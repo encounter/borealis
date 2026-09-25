@@ -350,9 +350,11 @@ if (BOREALIS_ENABLE_FILE_SELECT)
         find_library(BOREALIS_UIKIT_FRAMEWORK UIKit REQUIRED)
         find_library(BOREALIS_UNIFORM_TYPE_IDENTIFIERS_FRAMEWORK
                 UniformTypeIdentifiers REQUIRED)
-        target_sources(borealis_file_select PRIVATE src/file_select/ios.mm)
-        set_source_files_properties(src/file_select/ios.mm PROPERTIES COMPILE_FLAGS -fobjc-arc)
+        target_sources(borealis_file_select PRIVATE src/file_select/ios.mm src/file_select/ios_import.mm)
+        set_source_files_properties(src/file_select/ios.mm src/file_select/ios_import.mm
+                PROPERTIES COMPILE_FLAGS -fobjc-arc)
         target_link_libraries(borealis_file_select PRIVATE
+                borealis_log
                 ${BOREALIS_UIKIT_FRAMEWORK}
                 ${BOREALIS_UNIFORM_TYPE_IDENTIFIERS_FRAMEWORK})
     elseif (ANDROID)

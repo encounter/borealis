@@ -1,6 +1,8 @@
 #include "file_select_internal.hpp"
+#include "ios_import.hpp"
 
 #include "../io_internal.hpp"
+#include "borealis/log.hpp"
 
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
@@ -9,6 +11,7 @@
 #include <SDL3/SDL_properties.h>
 #include <SDL3/SDL_video.h>
 
+#include <dlfcn.h>
 #include <filesystem>
 #include <memory>
 #include <utility>
@@ -16,9 +19,12 @@
 using borealis::file_select::Callback;
 using borealis::file_select::Result;
 using borealis::file_select::Status;
+using borealis::file_select::detail::compare_ios_identity;
 using borealis::file_select::detail::complete;
+using borealis::file_select::detail::IOSIdentity;
 
 namespace {
+constexpr borealis::Log FileSelectLog{"borealis::file_select"};
 
 void* gPickerDelegateKey = &gPickerDelegateKey;
 
@@ -29,6 +35,7 @@ std::string error_message(NSError* error, const char* fallback) {
 
 struct IOSFileState {
     Callback callback;
+    bool importFiles = false;
     borealis::io::PathAccess sourceAccess;
     std::filesystem::path temporaryDirectory;
 
@@ -39,6 +46,41 @@ struct IOSFileState {
         }
     }
 };
+
+IOSIdentity signing_identity() {
+    void* security = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY);
+    if (security == nullptr) {
+        return IOSIdentity::Unknown;
+    }
+    const auto create =
+        reinterpret_cast<CFTypeRef (*)(CFAllocatorRef)>(dlsym(security, "SecTaskCreateFromSelf"));
+    const auto copyValue = reinterpret_cast<CFTypeRef (*)(CFTypeRef, CFStringRef, CFErrorRef*)>(
+        dlsym(security, "SecTaskCopyValueForEntitlement"));
+    CFTypeRef task = create != nullptr ? create(kCFAllocatorDefault) : nullptr;
+    CFTypeRef value = task != nullptr && copyValue != nullptr ?
+                          copyValue(task, CFSTR("application-identifier"), nullptr) :
+                          nullptr;
+    IOSIdentity identity = IOSIdentity::Unknown;
+    if (value != nullptr && CFGetTypeID(value) == CFStringGetTypeID()) {
+        NSString* applicationIdentifier = (__bridge NSString*)value;
+        NSString* bundleIdentifier = NSBundle.mainBundle.bundleIdentifier;
+        const char* identifier = applicationIdentifier.UTF8String;
+        const char* bundle = bundleIdentifier.UTF8String;
+        if (identifier != nullptr && bundle != nullptr) {
+            identity = compare_ios_identity(
+                {identifier, [applicationIdentifier lengthOfBytesUsingEncoding:NSUTF8StringEncoding]},
+                {bundle, [bundleIdentifier lengthOfBytesUsingEncoding:NSUTF8StringEncoding]});
+        }
+    }
+    if (value != nullptr) {
+        CFRelease(value);
+    }
+    if (task != nullptr) {
+        CFRelease(task);
+    }
+    dlclose(security);
+    return identity;
+}
 
 UIViewController* top_view_controller(UIViewController* controller) {
     UIViewController* current = controller;
@@ -73,8 +115,8 @@ NSURL* initial_directory_url(const std::string& defaultLocation) {
 
     std::string resolvedPath = defaultLocation;
     void* access = nullptr;
-    if (defaultLocation.starts_with("bookmark://")) {
-        auto resolved = borealis::io::detail::resolve_apple_bookmark(defaultLocation, true);
+    if (borealis::io::detail::is_apple_location(defaultLocation)) {
+        auto resolved = borealis::io::detail::resolve_apple_location(defaultLocation, true);
         if (resolved.status != borealis::io::Status::Ok) {
             return nil;
         }
@@ -113,6 +155,38 @@ NSURL* initial_directory_url(const std::string& defaultLocation) {
 
 - (void)documentPicker:(UIDocumentPickerViewController*)controller
     didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls {
+    if (self.state == nullptr) {
+        return;
+    }
+
+    if (self.state->importFiles) {
+        const auto root = borealis::io::detail::apple_import_directory();
+        std::string error;
+        auto batch =
+            borealis::file_select::detail::stage_ios_imports((__bridge void*)urls, root, error);
+        if (!batch) {
+            [self finishWithResult:Result{.status = Status::Failed, .message = std::move(error)}];
+            return;
+        }
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            Result result{.status = Status::Selected};
+            for (const auto& file : batch->files) {
+                auto retained = borealis::file_select::detail::retain_ios_import(file, root);
+                if (retained.status != borealis::io::Status::Ok) {
+                    result.status = Status::Failed;
+                    result.locations.clear();
+                    result.message = std::move(retained.message);
+                    break;
+                }
+                result.locations.push_back(std::move(retained.location));
+            }
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self finishWithResult:result];
+            });
+        });
+        return;
+    }
+
     Result result{.status = Status::Selected};
     for (NSURL* url in urls) {
         const BOOL accessing = [url startAccessingSecurityScopedResource];
@@ -131,7 +205,7 @@ NSURL* initial_directory_url(const std::string& defaultLocation) {
         result.locations.push_back(std::move(bookmark));
     }
 
-    if (result.locations.empty()) {
+    if (result.status == Status::Selected && result.locations.empty()) {
         result.status = Status::Failed;
         result.message = "The selected files could not be represented as UTF-8";
     }
@@ -151,19 +225,20 @@ namespace borealis::file_select::detail {
 namespace {
 
 void open_ios_picker(SDL_Window* parentWindow, std::string defaultLocation, bool multiSelect,
-    NSArray<UTType*>* contentTypes, Callback callback) {
+    NSArray<UTType*>* contentTypes, bool importFiles, Callback callback) {
     UIViewController* presenter = presenter_from_window(parentWindow);
     if (presenter == nil) {
-        complete(std::move(callback), {
+        complete(std::move(callback),
+            {
             .status = Status::Failed,
             .message = "Unable to find an iOS view controller for the file dialog",
         });
         return;
     }
 
-    UIDocumentPickerViewController* picker = [[UIDocumentPickerViewController alloc]
-        initForOpeningContentTypes:contentTypes
-                           asCopy:NO];
+    UIDocumentPickerViewController* picker =
+        [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:contentTypes
+                                                                    asCopy:importFiles ? YES : NO];
     picker.allowsMultipleSelection = multiSelect ? YES : NO;
     picker.shouldShowFileExtensions = YES;
     if (NSURL* directoryUrl = initial_directory_url(defaultLocation)) {
@@ -172,6 +247,7 @@ void open_ios_picker(SDL_Window* parentWindow, std::string defaultLocation, bool
 
     auto state = std::make_unique<IOSFileState>();
     state->callback = std::move(callback);
+    state->importFiles = importFiles;
     BorealisDocumentPickerDelegate* delegate = [BorealisDocumentPickerDelegate new];
     delegate.state = state.release();
     picker.delegate = delegate;
@@ -183,13 +259,19 @@ void open_ios_picker(SDL_Window* parentWindow, std::string defaultLocation, bool
 }  // namespace
 
 void open_ios_file(FileOptions options, Callback callback) {
+    const auto identity = signing_identity();
+    if (identity != IOSIdentity::Match) {
+        FileSelectLog.warn(
+            "Importing files because signing identity {}",
+            identity == IOSIdentity::Mismatch ? "does not match the bundle" : "is unavailable");
+    }
     open_ios_picker(options.parentWindow, std::move(options.defaultLocation), options.multiSelect,
-        @[ UTTypeItem ], std::move(callback));
+        @[ UTTypeItem ], identity != IOSIdentity::Match, std::move(callback));
 }
 
 void open_ios_folder(FolderOptions options, Callback callback) {
     open_ios_picker(options.parentWindow, std::move(options.defaultLocation), false,
-        @[ UTTypeFolder ], std::move(callback));
+        @[ UTTypeFolder ], false, std::move(callback));
 }
 
 void export_ios_file(ExportOptions options, Callback callback) {

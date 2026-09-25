@@ -1,4 +1,5 @@
 #include "file_select/file_select_internal.hpp"
+#include "file_select/ios_import.hpp"
 
 #include <gtest/gtest.h>
 
@@ -8,6 +9,27 @@
 #include <string>
 
 namespace {
+
+TEST(IOSIdentityTest, ComparesTheEntireBundleIdentifierWithoutAssumingATeam) {
+    using namespace borealis::file_select::detail;
+    EXPECT_EQ(
+        compare_ios_identity("PREFIX.org.example.app", "org.example.app"), IOSIdentity::Match);
+    EXPECT_EQ(compare_ios_identity("OTHER.org.example.app", "org.example.app"), IOSIdentity::Match);
+    EXPECT_EQ(
+        compare_ios_identity("PREFIX.org.other.app", "org.example.app"), IOSIdentity::Mismatch);
+    EXPECT_EQ(compare_ios_identity("PREFIX.org.example.app.extra", "org.example.app"),
+        IOSIdentity::Mismatch);
+}
+
+TEST(IOSIdentityTest, MissingOrMalformedIdentityIsUnknown) {
+    using namespace borealis::file_select::detail;
+    for (const auto* identifier : {"", "PREFIX", ".org.example.app", "PREFIX.", "PREFIX.*"}) {
+        EXPECT_EQ(compare_ios_identity(identifier, "org.example.app"), IOSIdentity::Unknown);
+    }
+    EXPECT_EQ(compare_ios_identity("PREFIX.org.example.app", ""), IOSIdentity::Unknown);
+    EXPECT_EQ(compare_ios_identity(std::string_view{"PREFIX.org\0example", 18}, "org"),
+        IOSIdentity::Unknown);
+}
 
 class FileSelectTest : public testing::Test {
 protected:

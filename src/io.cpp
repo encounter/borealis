@@ -383,9 +383,9 @@ OpenResult open(std::string_view location, File::Mode mode) {
 
     std::string resolved{location};
     void* access = nullptr;
-    if (location.starts_with("bookmark://")) {
+    if (detail::is_apple_location(location)) {
 #if defined(__APPLE__) && TARGET_OS_IOS && !TARGET_OS_TV && !TARGET_OS_MACCATALYST
-        auto bookmark = detail::resolve_apple_bookmark(location, true);
+        auto bookmark = detail::resolve_apple_location(location, true);
         if (bookmark.status != Status::Ok) {
             return failed_open(bookmark.status, std::move(bookmark.message));
         }
@@ -436,9 +436,9 @@ OpenResult open(std::string_view location, File::Mode mode) {
 }
 
 Status check(std::string_view location) {
-    if (location.starts_with("bookmark://")) {
+    if (detail::is_apple_location(location)) {
 #if defined(__APPLE__) && TARGET_OS_IOS && !TARGET_OS_TV && !TARGET_OS_MACCATALYST
-        return detail::apple_bookmark_check(location);
+        return detail::apple_location_check(location);
 #else
         return Status::Unsupported;
 #endif
@@ -455,9 +455,9 @@ Status check(std::string_view location) {
 }
 
 std::string display_name(std::string_view location) {
-    if (location.starts_with("bookmark://")) {
+    if (detail::is_apple_location(location)) {
 #if defined(__APPLE__) && TARGET_OS_IOS && !TARGET_OS_TV && !TARGET_OS_MACCATALYST
-        return detail::apple_bookmark_display_name(location);
+        return detail::apple_location_display_name(location);
 #else
         return {};
 #endif
@@ -477,9 +477,9 @@ JoinResult join(std::string_view folder, std::string_view relativePath) {
     if (!detail::safe_relative_path(relativePath)) {
         return {.status = Status::Failed, .message = "Child path must be a safe relative path"};
     }
-    if (folder.starts_with("bookmark://")) {
+    if (detail::is_apple_location(folder)) {
 #if defined(__APPLE__) && TARGET_OS_IOS && !TARGET_OS_TV && !TARGET_OS_MACCATALYST
-        return detail::apple_bookmark_join(folder, relativePath);
+        return detail::apple_location_join(folder, relativePath);
 #else
         return {.status = Status::Unsupported, .message = "Bookmarks are not supported"};
 #endif
@@ -516,9 +516,9 @@ JoinResult create_child(std::string_view folder, std::string_view name) {
         return existing;
     }
 
-    if (folder.starts_with("bookmark://")) {
+    if (detail::is_apple_location(folder)) {
 #if defined(__APPLE__) && TARGET_OS_IOS && !TARGET_OS_TV && !TARGET_OS_MACCATALYST
-        return detail::apple_bookmark_create_child(folder, name);
+        return detail::apple_location_create_child(folder, name);
 #else
         return {.status = Status::Unsupported, .message = "Bookmarks are not supported"};
 #endif
@@ -556,9 +556,9 @@ JoinResult create_child(std::string_view folder, std::string_view name) {
 }
 
 ListResult list(std::string_view folder) {
-    if (folder.starts_with("bookmark://")) {
+    if (detail::is_apple_location(folder)) {
 #if defined(__APPLE__) && TARGET_OS_IOS && !TARGET_OS_TV && !TARGET_OS_MACCATALYST
-        return detail::apple_bookmark_list(folder);
+        return detail::apple_location_list(folder);
 #else
         return {.status = Status::Unsupported, .message = "Bookmarks are not supported"};
 #endif
@@ -627,9 +627,9 @@ PathAccess& PathAccess::operator=(PathAccess&& other) noexcept {
 }
 
 PathAccess access_path(std::string_view location) {
-    if (location.starts_with("bookmark://")) {
+    if (detail::is_apple_location(location)) {
 #if defined(__APPLE__) && TARGET_OS_IOS && !TARGET_OS_TV && !TARGET_OS_MACCATALYST
-        auto resolved = detail::resolve_apple_bookmark(location, true);
+        auto resolved = detail::resolve_apple_location(location, true);
         if (resolved.status == Status::Ok) {
             return {fs_path_from_utf8(resolved.path), resolved.access};
         }
