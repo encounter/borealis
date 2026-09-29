@@ -61,13 +61,12 @@ inline void apply_ca_bundle(CURL* curl) {
         if (system.empty()) {
             return nullptr;
         }
-        if (is_readable_file(std::getenv("SSL_CERT_FILE"))) {
+        if (file_exists(std::getenv("SSL_CERT_FILE"))) {
             return &system;
         }
 #if CURL_AT_LEAST_VERSION(7, 84, 0)
         char* builtin = nullptr;
-        if (curl_easy_getinfo(curl, CURLINFO_CAINFO, &builtin) == CURLE_OK &&
-            is_readable_file(builtin))
+        if (curl_easy_getinfo(curl, CURLINFO_CAINFO, &builtin) == CURLE_OK && file_exists(builtin))
         {
             return nullptr;
         }

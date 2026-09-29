@@ -1,7 +1,5 @@
-# Builds a static libcurl (OpenSSL, HTTP(S) and WebSockets only) and provides CURL::libcurl.
 function(borealis_vendor_curl)
-    # curl's cmake_minimum_required predates CMP0126; without it, curl's set(CACHE) calls would
-    # discard the plain variables below.
+    set(CMAKE_POLICY_DEFAULT_CMP0125 NEW)
     set(CMAKE_POLICY_DEFAULT_CMP0126 NEW)
 
     set(BUILD_SHARED_LIBS OFF)
@@ -24,21 +22,43 @@ function(borealis_vendor_curl)
     set(CURL_USE_LIBSSH OFF)
     set(CURL_USE_GSSAPI OFF)
     set(USE_LIBIDN2 OFF)
-    set(USE_NGHTTP2 OFF)
     set(USE_LIBRTMP OFF)
     foreach (_protocol DICT FILE FTP GOPHER IMAP IPFS LDAP LDAPS MQTT POP3 RTSP SMB SMTP TELNET TFTP)
         set(CURL_DISABLE_${_protocol} ON)
     endforeach ()
 
-    # Don't bake in the build machine's CA paths; borealis locates the system bundle at runtime
-    # (see src/ca_bundle.hpp), and anything else linking this libcurl falls back to OpenSSL's
-    # default paths, which honor SSL_CERT_FILE and SSL_CERT_DIR. These are cache entries because
-    # curl's config header reads them after unsetting the cache entry for "none".
     set(CURL_CA_BUNDLE "none" CACHE STRING "")
     set(CURL_CA_PATH "none" CACHE STRING "")
     set(CURL_CA_FALLBACK ON CACHE BOOL "")
 
     include(FetchContent)
+    set(_borealis_exclude_from_all)
+    if (CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
+        set(_borealis_exclude_from_all EXCLUDE_FROM_ALL)
+    endif ()
+
+    find_path(BOREALIS_NGHTTP2_INCLUDE_DIR NAMES nghttp2/nghttp2.h)
+    find_library(BOREALIS_NGHTTP2_LIBRARY NAMES nghttp2)
+    if (BOREALIS_NGHTTP2_INCLUDE_DIR AND BOREALIS_NGHTTP2_LIBRARY)
+        set(NGHTTP2_INCLUDE_DIR "${BOREALIS_NGHTTP2_INCLUDE_DIR}")
+        set(NGHTTP2_LIBRARY "${BOREALIS_NGHTTP2_LIBRARY}")
+    else ()
+        message(STATUS "borealis: building vendored nghttp2")
+        set(ENABLE_LIB_ONLY ON)
+        set(ENABLE_DOC OFF)
+        set(ENABLE_FAILMALLOC OFF)
+        FetchContent_Declare(borealis_nghttp2
+                URL https://github.com/nghttp2/nghttp2/releases/download/v1.70.0/nghttp2-1.70.0.tar.xz
+                URL_HASH SHA256=e05cb1388eaca3830aded4ccf20044b6e1ac1a61411dcca11b0437c4285c8bc2
+                DOWNLOAD_EXTRACT_TIMESTAMP FALSE
+                ${_borealis_exclude_from_all}
+        )
+        FetchContent_MakeAvailable(borealis_nghttp2)
+        set(NGHTTP2_INCLUDE_DIR "${borealis_nghttp2_SOURCE_DIR}/lib/includes")
+        set(NGHTTP2_LIBRARY nghttp2_static)
+    endif ()
+    set(USE_NGHTTP2 ON)
+
     FetchContent_Declare(borealis_curl
             URL https://github.com/curl/curl/releases/download/curl-8_22_0/curl-8.22.0.tar.xz
             URL_HASH SHA256=f7ef3ae8a22e521f289803fe93543eb64c329b58aa73a9e224dfd915a2a5f4f7
@@ -49,3 +69,30 @@ function(borealis_vendor_curl)
         message(FATAL_ERROR "borealis: vendored libcurl did not provide target 'CURL::libcurl'")
     endif ()
 endfunction()
+
+set(_borealis_curl_vendored FALSE)
+if (NOT (WIN32 OR APPLE OR ANDROID) AND NOT TARGET CURL::libcurl AND
+        ((BOREALIS_ENABLE_HTTP AND BOREALIS_HTTP_BACKEND MATCHES "^(auto|curl)$") OR BOREALIS_ENABLE_SENTRY))
+    if (BOREALIS_CURL_PROVIDER STREQUAL "vendor")
+        set(_borealis_curl_vendored TRUE)
+    elseif (BOREALIS_CURL_PROVIDER STREQUAL "auto")
+        add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/curl_probe)
+        if (NOT BOREALIS_SYSTEM_CURL_USABLE)
+            find_package(OpenSSL QUIET)
+            if (OPENSSL_FOUND)
+                if (BOREALIS_SYSTEM_CURL_VERSION)
+                    message(STATUS "borealis: system libcurl ${BOREALIS_SYSTEM_CURL_VERSION} lacks required features")
+                endif ()
+                set(_borealis_curl_vendored TRUE)
+            else ()
+                message(WARNING "borealis: no suitable system libcurl, and OpenSSL was not found to build one")
+            endif ()
+        endif ()
+    elseif (NOT BOREALIS_CURL_PROVIDER STREQUAL "system")
+        message(FATAL_ERROR "borealis: unknown BOREALIS_CURL_PROVIDER '${BOREALIS_CURL_PROVIDER}'")
+    endif ()
+    if (_borealis_curl_vendored)
+        message(STATUS "borealis: building vendored libcurl")
+        borealis_vendor_curl()
+    endif ()
+endif ()

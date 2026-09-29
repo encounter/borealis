@@ -1,8 +1,7 @@
-# Checks whether the system libcurl is usable by borealis. This runs in its own directory so the
-# imported CURL::libcurl target from FindCURL doesn't leak into borealis if we vendor libcurl instead.
-find_package(CURL 7.47 QUIET OPTIONAL_COMPONENTS HTTPS SSL WSS)
+# Checks whether the system libcurl is usable by borealis.
+find_package(CURL 7.47 QUIET OPTIONAL_COMPONENTS HTTPS SSL HTTP2 WSS)
 set(_usable FALSE)
-if (CURL_FOUND AND CURL_HTTPS_FOUND AND CURL_SSL_FOUND)
+if (CURL_FOUND AND CURL_HTTPS_FOUND AND CURL_SSL_FOUND AND CURL_HTTP2_FOUND)
     if (NOT BOREALIS_ENABLE_WEBSOCKET OR CURL_WSS_FOUND)
         set(_usable TRUE)
     endif ()
