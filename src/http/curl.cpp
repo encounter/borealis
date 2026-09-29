@@ -253,6 +253,7 @@ detail::TransportResult detail::send_request(const TransportRequest& request) {
     curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &context);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    borealis::detail::curl::apply_ca_bundle(curl);
 #if CURL_AT_LEAST_VERSION(7, 85, 0)
     curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https");
     curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "https");

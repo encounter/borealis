@@ -14,6 +14,10 @@
 #include <string>
 #include <string_view>
 
+#if defined(__unix__) && !defined(__ANDROID__)
+#include "../ca_bundle.hpp"
+#endif
+
 namespace borealis::detail::curl {
 
 class Headers {
@@ -46,6 +50,36 @@ private:
 inline void initialize() {
     static std::once_flag initialized;
     std::call_once(initialized, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
+}
+
+// Points libcurl at the system CA bundle when its compiled-in default is missing. Honors
+// SSL_CERT_FILE first, like the curl tool and OpenSSL.
+inline void apply_ca_bundle(CURL* curl) {
+#if defined(__unix__) && !defined(__ANDROID__)
+    static const std::string* const bundle = [curl]() -> const std::string* {
+        const std::string& system = system_ca_bundle();
+        if (system.empty()) {
+            return nullptr;
+        }
+        if (is_readable_file(std::getenv("SSL_CERT_FILE"))) {
+            return &system;
+        }
+#if CURL_AT_LEAST_VERSION(7, 84, 0)
+        char* builtin = nullptr;
+        if (curl_easy_getinfo(curl, CURLINFO_CAINFO, &builtin) == CURLE_OK &&
+            is_readable_file(builtin))
+        {
+            return nullptr;
+        }
+#endif
+        return &system;
+    }();
+    if (bundle != nullptr) {
+        curl_easy_setopt(curl, CURLOPT_CAINFO, bundle->c_str());
+    }
+#else
+    (void)curl;
+#endif
 }
 
 inline long timeout_ms(std::chrono::milliseconds timeout) {
