@@ -6,6 +6,7 @@
 
 #include <cstdlib>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <system_error>
 
@@ -21,6 +22,9 @@
 
 #if BOREALIS_HAS_SENTRY
 #include <sentry.h>
+#if defined(__linux__) && !defined(__ANDROID__)
+#include "ca_bundle.hpp"
+#endif
 #endif
 
 namespace borealis::sentry {
@@ -112,6 +116,11 @@ bool initialize(const Options& options) {
     sentry_options_set_cache_keep(sentryOptions, 1);
     sentry_options_set_max_breadcrumbs(sentryOptions, 100);
     configure_paths(sentryOptions, options);
+#if defined(__linux__) && !defined(__ANDROID__)
+    if (const std::string& caBundle = borealis::detail::system_ca_bundle(); !caBundle.empty()) {
+        sentry_options_set_ca_certs(sentryOptions, caBundle.c_str());
+    }
+#endif
 
     if (sentry_init(sentryOptions) != 0) {
         SentryLog.warn("Failed to initialize Sentry crash reporting");
