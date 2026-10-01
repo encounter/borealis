@@ -19,6 +19,7 @@ option(BOREALIS_ENABLE_DATA "Build borealis::data (requires SDL3 and nlohmann_js
 option(BOREALIS_ENABLE_IO "Build borealis::io (requires SDL3)" ON)
 option(BOREALIS_ENABLE_FILE_SELECT "Build borealis::file_select (requires SDL3)" ON)
 option(BOREALIS_ENABLE_DISC "Build borealis::disc (requires borealis::io, nod, and xxhash)" ON)
+option(BOREALIS_ENABLE_UI "Build borealis::ui (requires RmlUi)" OFF)
 option(BOREALIS_ENABLE_SENTRY "Build borealis::sentry with sentry-native/crashpad" OFF)
 set(_borealis_discord_default ON)
 if (ANDROID OR IOS OR TVOS OR CMAKE_SYSTEM_NAME MATCHES "^(iOS|tvOS)$")
@@ -509,6 +510,45 @@ if (BOREALIS_ENABLE_UPDATE)
     target_link_libraries(borealis_update
             PUBLIC borealis_http
             PRIVATE fmt::fmt borealis_json_dep
+    )
+endif ()
+
+if (BOREALIS_ENABLE_UI)
+    if (NOT TARGET RmlUi::Core)
+        find_package(RmlUi CONFIG REQUIRED)
+    endif ()
+    add_library(borealis_ui STATIC
+            src/ui/bool_button.cpp
+            src/ui/button.cpp
+            src/ui/clamped_text.cpp
+            src/ui/component.cpp
+            src/ui/context_menu.cpp
+            src/ui/document.cpp
+            src/ui/dropdown_button.cpp
+            src/ui/event.cpp
+            src/ui/group_button.cpp
+            src/ui/icon_button.cpp
+            src/ui/input.cpp
+            src/ui/internal.hpp
+            src/ui/list.cpp
+            src/ui/menu_bar.cpp
+            src/ui/modal.cpp
+            src/ui/nav_group.cpp
+            src/ui/number_button.cpp
+            src/ui/pane.cpp
+            src/ui/popover.cpp
+            src/ui/row.cpp
+            src/ui/select_button.cpp
+            src/ui/string_button.cpp
+            src/ui/tab_bar.cpp
+            src/ui/tooltip.cpp
+            src/ui/ui.cpp
+            src/ui/window.cpp
+    )
+    add_library(borealis::ui ALIAS borealis_ui)
+    target_link_libraries(borealis_ui
+            PUBLIC borealis_core aurora::core aurora::pad RmlUi::Core
+            PRIVATE borealis_io fmt::fmt
     )
 endif ()
 

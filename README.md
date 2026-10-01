@@ -9,23 +9,24 @@ Supported platforms: Windows, Linux, Android, macOS, iOS and tvOS.
 
 | Target                   | Contents                                                                | Status  |
 |--------------------------|-------------------------------------------------------------------------|---------|
-| `borealis::cli`          | Standard options with cxxopts                                           | ✅       |
+| `borealis::cli`          | Standard options with cxxopts                                           | ✅      |
 | `borealis::config`       | ConfigVar system with JSON storage                                      | planned |
-| `borealis::core`         | Shared utilities                                                        | ✅       |
-| `borealis::crash`        | In-process crash handler with backtrace unwinding & logging             | ✅       |
-| `borealis::data`         | Data directory resolution, portable mode, data migration                | ✅       |
-| `borealis::disc`         | Disc inspection and hash verification                                   | ✅       |
-| `borealis::discord`      | Discord rich presence IPC client                                        | ✅       |
-| `borealis::file_select`  | Cross-platform file/folder selection                                    | ✅       |
-| `borealis::http`         | Asynchronous HTTPS client (HTTP/2, TLS 1.2+)                            | ✅       |
-| `borealis::io`           | File I/O + paths, bookmarks (iOS), and document URIs (Android)          | ✅       |
-| `borealis::log`          | fmt-based logging + sinks (console, rotating file, logcat, ring buffer) | ✅       |
-| `borealis::net`          | TCP, UDP, and asynchronous DNS                                          | ✅       |
-| `borealis::presentation` | Android frame-rate configuration                                        | ✅       |
-| `borealis::sentry`       | Optional sentry-native/crashpad integration and consent state           | ✅       |
-| `borealis::task`         | Shared async task pool with cancellation and progress                   | ✅       |
-| `borealis::update`       | Update checks via GitHub releases                                       | ✅       |
-| `borealis::ws`           | WebSocket client over HTTPS                                             | ✅       |
+| `borealis::core`         | Shared utilities                                                        | ✅      |
+| `borealis::crash`        | In-process crash handler with backtrace unwinding & logging             | ✅      |
+| `borealis::data`         | Data directory resolution, portable mode, data migration                | ✅      |
+| `borealis::disc`         | Disc inspection and hash verification                                   | ✅      |
+| `borealis::discord`      | Discord rich presence IPC client                                        | ✅      |
+| `borealis::file_select`  | Cross-platform file/folder selection                                    | ✅      |
+| `borealis::http`         | Asynchronous HTTPS client (HTTP/2, TLS 1.2+)                            | ✅      |
+| `borealis::io`           | File I/O + paths, bookmarks (iOS), and document URIs (Android)          | ✅      |
+| `borealis::log`          | fmt-based logging + sinks (console, rotating file, logcat, ring buffer) | ✅      |
+| `borealis::net`          | TCP, UDP, and asynchronous DNS                                          | ✅      |
+| `borealis::presentation` | Android frame-rate configuration                                        | ✅      |
+| `borealis::sentry`       | Optional sentry-native/crashpad integration and consent state           | ✅      |
+| `borealis::task`         | Shared async task pool with cancellation and progress                   | ✅      |
+| `borealis::ui`           | RmlUi UI framework, document system, and shared components              | ✅      |
+| `borealis::update`       | Update checks via GitHub releases                                       | ✅      |
+| `borealis::ws`           | WebSocket client over HTTPS                                             | ✅      |
 
 Borealis also provides an [Android platform layer](platforms/android/README.md) that integrates SDL, Aurora and provides
 Java-side support for Borealis modules.
