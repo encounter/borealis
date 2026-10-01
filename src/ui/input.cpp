@@ -226,8 +226,12 @@ struct NavContext {
 
     // Whether the event is bound to navigation
     [[nodiscard]] bool navigates(const MappingResult& result) const noexcept {
-        return std::ranges::any_of(
-            result.targets, [&](ControlId control) { return navigates(control); });
+        return std::ranges::any_of(result.targets, [&](ControlId control) {
+            return navigates(control) ||
+                   std::ranges::any_of(active, [control](const ActiveNav& nav) {
+                       return nav.contributor.control == control;
+                   });
+        });
     }
 
     void assign(std::shared_ptr<const BindingSet> set) noexcept {
