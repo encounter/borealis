@@ -17,6 +17,7 @@ option(BOREALIS_ENABLE_UPDATE "Build borealis::update (requires borealis::http a
 option(BOREALIS_ENABLE_CRASH "Build borealis::crash" ON)
 option(BOREALIS_ENABLE_DATA "Build borealis::data (requires SDL3 and nlohmann_json)" ON)
 option(BOREALIS_ENABLE_IO "Build borealis::io (requires SDL3)" ON)
+option(BOREALIS_ENABLE_CONFIG "Build borealis::config (requires borealis::io and nlohmann_json)" ON)
 option(BOREALIS_ENABLE_FILE_SELECT "Build borealis::file_select (requires SDL3)" ON)
 option(BOREALIS_ENABLE_DISC "Build borealis::disc (requires borealis::io, nod, and xxhash)" ON)
 option(BOREALIS_ENABLE_UI "Build borealis::ui (requires RmlUi)" OFF)
@@ -267,6 +268,18 @@ if (BOREALIS_ENABLE_IO)
     elseif (ANDROID)
         target_sources(borealis_io PRIVATE src/io_android.cpp)
     endif ()
+endif ()
+
+if (BOREALIS_ENABLE_CONFIG)
+    if (NOT TARGET borealis_io)
+        message(FATAL_ERROR "borealis::config requires borealis::io")
+    endif ()
+    set(_borealis_json_needed ON)
+    add_library(borealis_config STATIC src/config.cpp)
+    add_library(borealis::config ALIAS borealis_config)
+    target_link_libraries(borealis_config
+            PUBLIC borealis_log borealis_json_dep
+            PRIVATE borealis_io fmt::fmt)
 endif ()
 
 add_library(borealis_presentation STATIC src/presentation.cpp)
@@ -550,6 +563,10 @@ if (BOREALIS_ENABLE_UI)
             PUBLIC borealis_core aurora::core aurora::pad RmlUi::Core
             PRIVATE borealis_io fmt::fmt
     )
+    if (TARGET borealis_config)
+        # For borealis/ui/config.hpp
+        target_link_libraries(borealis_ui PUBLIC borealis_config)
+    endif ()
 endif ()
 
 if (_borealis_sdl_needed)

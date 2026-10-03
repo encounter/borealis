@@ -6,6 +6,8 @@
 
 #include <filesystem>
 #include <optional>
+#include <string>
+#include <vector>
 
 namespace borealis::cli {
 
@@ -14,6 +16,8 @@ struct StandardOptionSet {
     bool logDir = true;
     bool userDir = true;
     bool console = true;
+    /** --cvar KEY=VALUE, for borealis::config::apply_overrides. */
+    bool configOverrides = true;
 };
 
 struct StandardOptions {
@@ -21,6 +25,8 @@ struct StandardOptions {
     std::filesystem::path logDir;
     std::filesystem::path userDir;
     bool console = false;
+    /** Each --cvar KEY=VALUE, in order. Values may contain commas. */
+    std::vector<std::string> configOverrides;
 
     void apply_to(log::Options& options) const;
 };

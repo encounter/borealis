@@ -52,6 +52,10 @@ void add_standard_options(cxxopts::Options& options, const StandardOptionSet& se
         adder("console", "Show the Windows console window for logs",
             cxxopts::value<bool>()->default_value("false")->implicit_value("true"));
     }
+    if (set.configOverrides) {
+        adder("cvar", "Override a config value for this session (repeatable)",
+            cxxopts::value<std::string>(), "KEY=VALUE");
+    }
 }
 
 StandardOptions parse(const cxxopts::ParseResult& parsed) {
@@ -69,6 +73,13 @@ StandardOptions parse(const cxxopts::ParseResult& parsed) {
     standard.userDir = read_path(parsed, "user-dir");
     if (given(parsed, "console")) {
         standard.console = parsed["console"].as<bool>();
+    }
+    if (given(parsed, "cvar")) {
+        for (const auto& argument : parsed.arguments()) {
+            if (argument.key() == "cvar") {
+                standard.configOverrides.push_back(argument.value());
+            }
+        }
     }
 
     return standard;

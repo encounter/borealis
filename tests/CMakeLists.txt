@@ -64,6 +64,12 @@ if (TARGET borealis_file_select)
     endif ()
 endif ()
 
+if (TARGET borealis_config)
+    add_executable(borealis_config_test config_test.cpp)
+    target_link_libraries(borealis_config_test PRIVATE borealis::config)
+    borealis_add_gtest(borealis_config_test)
+endif ()
+
 if (TARGET borealis_data)
     add_executable(borealis_data_test data_test.cpp)
     target_include_directories(borealis_data_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
