@@ -103,4 +103,12 @@ TEST(Cli, GameOptionsCoexist) {
     EXPECT_EQ(parsed.unmatched().size(), 1);
 }
 
+TEST(Cli, ConfigOverridesRepeatAndKeepCommas) {
+    const auto standard = borealis::cli::parse(parse_args(
+        {"--cvar", "video.vsync=false", "-L", "info", "--cvar=game.layout={\"x\":1,\"y\":2}"}));
+    EXPECT_EQ(standard.configOverrides,
+        (std::vector<std::string>{"video.vsync=false", "game.layout={\"x\":1,\"y\":2}"}));
+    EXPECT_TRUE(borealis::cli::parse(parse_args({})).configOverrides.empty());
+}
+
 }  // namespace

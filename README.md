@@ -7,26 +7,26 @@ Supported platforms: Windows, Linux, Android, macOS, iOS and tvOS.
 
 ## Modules
 
-| Target                   | Contents                                                                | Status  |
-|--------------------------|-------------------------------------------------------------------------|---------|
-| `borealis::cli`          | Standard options with cxxopts                                           | ✅      |
-| `borealis::config`       | ConfigVar system with JSON storage                                      | planned |
-| `borealis::core`         | Shared utilities                                                        | ✅      |
-| `borealis::crash`        | In-process crash handler with backtrace unwinding & logging             | ✅      |
-| `borealis::data`         | Data directory resolution, portable mode, data migration                | ✅      |
-| `borealis::disc`         | Disc inspection and hash verification                                   | ✅      |
-| `borealis::discord`      | Discord rich presence IPC client                                        | ✅      |
-| `borealis::file_select`  | Cross-platform file/folder selection                                    | ✅      |
-| `borealis::http`         | Asynchronous HTTPS client (HTTP/2, TLS 1.2+)                            | ✅      |
-| `borealis::io`           | File I/O + paths, bookmarks (iOS), and document URIs (Android)          | ✅      |
-| `borealis::log`          | fmt-based logging + sinks (console, rotating file, logcat, ring buffer) | ✅      |
-| `borealis::net`          | TCP, UDP, and asynchronous DNS                                          | ✅      |
-| `borealis::presentation` | Android frame-rate configuration                                        | ✅      |
-| `borealis::sentry`       | Optional sentry-native/crashpad integration and consent state           | ✅      |
-| `borealis::task`         | Shared async task pool with cancellation and progress                   | ✅      |
-| `borealis::ui`           | RmlUi UI framework, document system, and shared components              | ✅      |
-| `borealis::update`       | Update checks via GitHub releases                                       | ✅      |
-| `borealis::ws`           | WebSocket client over HTTPS                                             | ✅      |
+| Target                   | Contents                                                                |
+|--------------------------|-------------------------------------------------------------------------|
+| `borealis::cli`          | Standard options with cxxopts                                           |
+| `borealis::config`       | ConfigVar system with JSON storage, observers & overrides               |
+| `borealis::core`         | Shared utilities                                                        |
+| `borealis::crash`        | In-process crash handler with backtrace unwinding & logging             |
+| `borealis::data`         | Data directory resolution, portable mode, data migration                |
+| `borealis::disc`         | Disc inspection and hash verification                                   |
+| `borealis::discord`      | Discord rich presence IPC client                                        |
+| `borealis::file_select`  | Cross-platform file/folder selection                                    |
+| `borealis::http`         | Asynchronous HTTPS client (HTTP/2, TLS 1.2+)                            |
+| `borealis::io`           | File I/O + paths, bookmarks (iOS), and document URIs (Android)          |
+| `borealis::log`          | fmt-based logging + sinks (console, rotating file, logcat, ring buffer) |
+| `borealis::net`          | TCP, UDP, and asynchronous DNS                                          |
+| `borealis::presentation` | Android frame-rate configuration                                        |
+| `borealis::sentry`       | Optional sentry-native/crashpad integration and consent state           |
+| `borealis::task`         | Shared async task pool with cancellation and progress                   |
+| `borealis::ui`           | RmlUi UI framework, document system, and shared components              |
+| `borealis::update`       | Update checks via GitHub releases                                       |
+| `borealis::ws`           | WebSocket client over HTTPS                                             |
 
 Borealis also provides an [Android platform layer](platforms/android/README.md) that integrates SDL, Aurora and provides
 Java-side support for Borealis modules.
@@ -168,6 +168,58 @@ borealis::data::Manager dataManager{AppInfo, {
 
 const auto status = dataManager.initialize(userDirectoryOverride);
 const auto& paths = dataManager.paths();
+```
+
+### Configuration
+
+`borealis::config` stores typed settings as flat keys in a JSON file. Declare `Var<T>` members in a settings struct
+using `<borealis/config.hpp>`, and define their keys and defaults in a source file that includes
+`<borealis/config_codec.hpp>`.
+
+```cpp
+struct Settings {
+    struct {
+        Var<bool> fullscreen;
+        Var<Resampler> resampler;  // enums need a constexpr config_enum_values(E) table next to them
+    } video;
+    struct {
+        Var<int> scale;
+    } ui;
+};
+
+Settings settings{
+    .video = {
+        .fullscreen{"video.fullscreen", false},
+        .resampler{"video.resampler", Resampler::Bilinear},
+    },
+    .ui = {
+        .scale{"ui.scale", 100, {.min = 50, .max = 200}},
+    },
+};
+```
+
+Load once at startup, call `update()` every frame to autosave changes after a short delay, and `flush()` on shutdown
+and when entering background (for mobile). `--cvar KEY=VALUE` (from `borealis::cli`) sets session-only overrides:
+
+```cpp
+borealis::config::apply_overrides(standardOptions.configOverrides);
+borealis::config::load({.path = paths.userPath / "config.json", .version = 1});
+borealis::config::update();
+borealis::config::flush();
+```
+
+Read vars directly (`if (settings.video.fullscreen)`, `*settings.ui.scale`) and write them with `set()` and `reset()`.
+Only user values are saved, and unknown keys are preserved. Subsystems apply settings with `observe()`, which runs
+immediately and on every change. `Overlay` temporarily overrides values, e.g. for a game mode that forces some
+settings. `<borealis/ui/config.hpp>` provides binding helpers for controls.
+
+```cpp
+auto binding = settings.video.resampler.observe(apply_resampler);  // disconnects when destroyed, or use .release()
+
+borealis::config::Overlay recording{"recording"};
+recording.set(settings.video.fullscreen, true);  // recording.clear() restores
+
+pane.add_child<BoolButton>(bind(settings.video.fullscreen, {.key = "Fullscreen"}));
 ```
 
 ### Disc inspection and verification
