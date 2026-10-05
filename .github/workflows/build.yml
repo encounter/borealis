@@ -36,6 +36,7 @@ jobs:
             runner: ubuntu-24.04
             minimal: true
             flags: >-
+              -DBOREALIS_ENABLE_CONFIG=OFF
               -DBOREALIS_ENABLE_DATA=OFF
               -DBOREALIS_ENABLE_DISC=OFF
               -DBOREALIS_ENABLE_FILE_SELECT=OFF
