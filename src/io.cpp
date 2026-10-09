@@ -435,6 +435,28 @@ OpenResult open(std::string_view location, File::Mode mode) {
     return {.status = Status::Ok, .file = File{handle, access, mode != File::Mode::Read}};
 }
 
+ReadResult read_file(std::string_view location) {
+    auto opened = open(location);
+    if (opened.status != Status::Ok) {
+        return {.status = opened.status, .message = std::move(opened.message)};
+    }
+
+    SDL_ClearError();
+    size_t size = 0;
+    const std::unique_ptr<void, decltype(&SDL_free)> bytes{
+        SDL_LoadFile_IO(opened.file.handle(), &size, false), SDL_free};
+    if (!bytes || SDL_GetIOStatus(opened.file.handle()) == SDL_IO_STATUS_ERROR) {
+        const char* error = SDL_GetError();
+        return {
+            .status = Status::Failed,
+            .message = error != nullptr && error[0] != '\0' ? error : "Failed to read file",
+        };
+    }
+
+    const auto* begin = static_cast<const uint8_t*>(bytes.get());
+    return {.status = Status::Ok, .data = {begin, begin + size}};
+}
+
 Status check(std::string_view location) {
     if (detail::is_apple_location(location)) {
 #if defined(__APPLE__) && TARGET_OS_IOS && !TARGET_OS_TV && !TARGET_OS_MACCATALYST

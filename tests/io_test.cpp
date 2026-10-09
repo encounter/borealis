@@ -49,6 +49,50 @@ TEST_F(IOTest, StreamsAndSeeks) {
     EXPECT_FALSE(opened.file.writable());
 }
 
+TEST_F(IOTest, ReadsEntireBinaryFile) {
+    const std::array contents{std::byte{0x00}, std::byte{0x7f}, std::byte{0x80}, std::byte{0xff}};
+    const auto path = directory / "binary.dat";
+    {
+        std::ofstream output{path, std::ios::binary};
+        output.write(reinterpret_cast<const char*>(contents.data()), contents.size());
+    }
+
+    const auto result = borealis::io::read_file(borealis::io::fs_path_to_string(path));
+    ASSERT_EQ(result.status, borealis::io::Status::Ok) << result.message;
+    EXPECT_EQ(result.data, (std::vector<std::byte>{contents.begin(), contents.end()}));
+    EXPECT_TRUE(result.message.empty());
+}
+
+TEST_F(IOTest, ReadsEmptyFile) {
+    const auto path = directory / "empty.dat";
+    std::ofstream{path, std::ios::binary};
+
+    const auto result = borealis::io::read_file(borealis::io::fs_path_to_string(path));
+    ASSERT_EQ(result.status, borealis::io::Status::Ok) << result.message;
+    EXPECT_TRUE(result.data.empty());
+    EXPECT_TRUE(result.message.empty());
+}
+
+TEST_F(IOTest, ReadFilePreservesOpenErrors) {
+    const auto missing =
+        borealis::io::read_file(borealis::io::fs_path_to_string(directory / "missing.dat"));
+    EXPECT_EQ(missing.status, borealis::io::Status::NotFound);
+    EXPECT_TRUE(missing.data.empty());
+    EXPECT_FALSE(missing.message.empty());
+
+    const auto unsupported = borealis::io::read_file("unsupported://sample.dat");
+    EXPECT_EQ(unsupported.status, borealis::io::Status::Unsupported);
+    EXPECT_TRUE(unsupported.data.empty());
+    EXPECT_FALSE(unsupported.message.empty());
+}
+
+TEST_F(IOTest, ReadFileRejectsDirectory) {
+    const auto result = borealis::io::read_file(borealis::io::fs_path_to_string(directory));
+    EXPECT_EQ(result.status, borealis::io::Status::Failed);
+    EXPECT_TRUE(result.data.empty());
+    EXPECT_FALSE(result.message.empty());
+}
+
 TEST_F(IOTest, RandomAccessFileStaysBoundAcrossRenameAndDelete) {
     auto opened = borealis::io::RandomAccessFile::open(directory / "sample.txt");
     ASSERT_EQ(opened.status, borealis::io::Status::Ok) << opened.message;

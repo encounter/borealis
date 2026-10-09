@@ -108,6 +108,15 @@ struct OpenResult {
 /** Opens a file from an opaque location. */
 OpenResult open(std::string_view location, File::Mode mode = File::Mode::Read);
 
+struct ReadResult {
+    Status status = Status::Failed;
+    std::vector<uint8_t> data;
+    std::string message;
+};
+
+/** Reads an entire file from an opaque location. Data is empty on failure. */
+ReadResult read_file(std::string_view location);
+
 /** File access probe. */
 Status check(std::string_view location);
 
