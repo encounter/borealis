@@ -794,6 +794,8 @@ EventResult on_event(const InputEvent& event, void*) {
     case InputSource::Kind::Controller:
         handle_controller(event);
         break;
+    case InputSource::Kind::Device:
+        break;
     }
     sNavAxis.refresh();
     // Input that opened or closed a document belongs to the UI.

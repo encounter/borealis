@@ -76,7 +76,7 @@ Options make_options() {
         .migration =
             {
                 .directories = {"saves", "textures"},
-                .files = {"config.json", "controller_ports.dat"},
+                .files = {"config.json", "input.json", "controller_ports.dat"},
                 .extensions = {".controller", ".gci"},
                 .filenamePatterns = {{.prefix = "MemoryCard", .suffix = ".raw"}},
             },
@@ -181,6 +181,7 @@ TEST_F(DataTest, SuccessfulMigrationClearsPreviousPath) {
     write_descriptor(
         environment.preferencePath / "data_location.json", LocationMode::Custom, target, source);
     write_text(source / "config.json", "config");
+    write_text(source / "input.json", "input profiles");
     write_text(source / "profile.controller", "controller");
     write_text(source / "MemoryCardA.raw", "card");
     write_text(source / "unrelated.bin", "leave");
@@ -194,6 +195,7 @@ TEST_F(DataTest, SuccessfulMigrationClearsPreviousPath) {
     ManagerBackend manager{make_options(), environment};
     EXPECT_TRUE(manager.initialize({}));
     EXPECT_EQ(read_text(target / "config.json"), "config");
+    EXPECT_EQ(read_text(target / "input.json"), "input profiles");
     EXPECT_EQ(read_text(target / "profile.controller"), "controller");
     EXPECT_EQ(read_text(target / "MemoryCardA.raw"), "card");
     EXPECT_EQ(read_text(target / "saves" / "slot.dat"), "save");

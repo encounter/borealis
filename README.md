@@ -161,7 +161,7 @@ borealis::data::Manager dataManager{AppInfo, {
     },
     .migration = {
         .directories = {"saves", "texture_replacements"},
-        .files = {"config.json"},
+        .files = {"config.json", "input.json"},
         .extensions = {".gci"},
     },
 }};
