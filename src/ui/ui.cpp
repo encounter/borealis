@@ -28,6 +28,7 @@ std::vector<ScopedStyles> sScopedStyles;
 int sUserScale = 0;
 std::string sGlobalStylesheet = "res/rml/global.rcss";
 NavSoundHandler sNavSoundHandler = nullptr;
+ShellStylesheets sShellStylesheets;
 
 std::vector<const Rml::StyleSheetContainer*> scoped_sheets(DocumentScope scope) {
     std::vector<const Rml::StyleSheetContainer*> sheets;
@@ -53,6 +54,22 @@ void restyle_scope(DocumentScope scope) {
 }
 
 }  // namespace
+
+Rml::String detail::stylesheet_links(const std::vector<Rml::String>& sheets) {
+    Rml::String result;
+    for (const auto& sheet : sheets) {
+        result += "    <link type=\"text/rcss\" href=\"" + escape(sheet) + "\" />\n";
+    }
+    return result;
+}
+
+void set_shell_stylesheets(ShellStylesheets sheets) noexcept {
+    sShellStylesheets = std::move(sheets);
+}
+
+const ShellStylesheets& shell_stylesheets() noexcept {
+    return sShellStylesheets;
+}
 
 bool initialize() noexcept {
     if (sInitialized) {

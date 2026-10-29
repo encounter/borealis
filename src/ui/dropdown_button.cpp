@@ -11,6 +11,7 @@ DropdownButton::DropdownButton(Rml::Element* parent, Props props)
     : BaseControlledSelectButton{parent, {.key = props.key, .submit = false}},
       mProps{std::move(props)} {
     mRoot->SetClass("dropdown-button", true);
+    mRoot->SetClass("has-key", !mProps.key.empty());
     append_text(append(mRoot, "dropdown-indicator"), material_icon("expand_more"));
     DropdownButton::update();
 }
@@ -88,6 +89,7 @@ void DropdownButton::toggle_menu() {
     }
 
     auto menu = std::make_unique<ContextMenu>(mRoot, std::move(items));
+    menu->body()->SetClass("dropdown-menu", true);
     menu->body()->SetProperty(Rml::PropertyId::MinWidth,
         Rml::Property{mRoot->GetBox().GetSize(Rml::BoxArea::Border).x, Rml::Unit::PX});
     mMenu = menu.get();

@@ -27,6 +27,8 @@ public:
         Rml::String variant;
         Rml::String icon = "";
         bool isVertical = false;
+        std::vector<Rml::String> styleSheets;
+        WindowBackgroundFactory background;
     };
 
     explicit Modal(Props props);

@@ -5,7 +5,13 @@
 
 namespace borealis::ui {
 
-Modal::Modal(Props props) : WindowSmall("modal"), mProps(std::move(props)) {
+Modal::Modal(Props props)
+    : WindowSmall(WindowSmall::Props{
+          .windowClass = "modal",
+          .styleSheets = props.styleSheets,
+          .background = std::move(props.background),
+      }),
+      mProps(std::move(props)) {
     if (!mProps.variant.empty()) {
         mRoot->SetClass(mProps.variant, true);
     }

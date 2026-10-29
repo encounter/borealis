@@ -1,5 +1,7 @@
 #include <borealis/ui/window.hpp>
 
+#include "internal.hpp"
+
 #include <borealis/ui/pane.hpp>
 #include <borealis/ui/ui.hpp>
 
@@ -22,15 +24,12 @@ float base_body_padding(Rml::Context* context) noexcept {
 }
 
 Rml::String window_document_source(const std::vector<Rml::String>& styleSheets) {
-    Rml::String links;
-    for (const auto& sheet : styleSheets) {
-        links += fmt::format("    <link type=\"text/rcss\" href=\"{}\" />\n", sheet);
-    }
+    const auto links = detail::stylesheet_links(shell_stylesheets().window);
+    const auto extraLinks = detail::stylesheet_links(styleSheets);
     return fmt::format(R"RML(
 <rml>
 <head>
-    <link type="text/rcss" href="res/rml/theme.rcss" />
-    <link type="text/rcss" href="res/rml/controls.rcss" />
+{}
     <link type="text/rcss" href="res/rml/tabbing.rcss" />
     <link type="text/rcss" href="res/rml/window.rcss" />
 {}</head>
@@ -39,29 +38,69 @@ Rml::String window_document_source(const std::vector<Rml::String>& styleSheets) 
 </body>
 </rml>
 )RML",
-        links);
+        links, extraLinks);
 }
 
-const Rml::String kDocumentSourceSmall = R"RML(
+Rml::String small_document_source(const std::vector<Rml::String>& styleSheets) {
+    return fmt::format(R"RML(
 <rml>
 <head>
-    <link type="text/rcss" href="res/rml/theme.rcss" />
-    <link type="text/rcss" href="res/rml/controls.rcss" />
+{}
     <link type="text/rcss" href="res/rml/window.rcss" />
-</head>
+{}</head>
 <body>
     <window id="window" class="small">
         <modal-dialog id="dialog"/>
     </window>
 </body>
 </rml>
-)RML";
+)RML",
+        detail::stylesheet_links(shell_stylesheets().windowSmall),
+        detail::stylesheet_links(styleSheets));
+}
+
+void disable_decoration_input(Rml::Element* element) {
+    if (!element) {
+        return;
+    }
+    element->SetProperty("pointer-events", "none");
+    element->SetProperty("focus", "none");
+    element->SetProperty("tab-index", "none");
+    for (int i = 0; i < element->GetNumChildren(); ++i) {
+        disable_decoration_input(element->GetChild(i));
+    }
+}
+
+Rml::Element* create_background_root(Rml::Element* root) {
+    auto child = root->GetOwnerDocument()->CreateElement("background");
+    child->SetProperty("display", "block");
+    child->SetProperty("position", "absolute");
+    child->SetProperty("left", "0px");
+    child->SetProperty("top", "0px");
+    child->SetProperty("width", "100%");
+    child->SetProperty("height", "100%");
+    child->SetProperty("overflow", "hidden");
+    child->SetProperty("z-index", "-1");
+    return root->InsertBefore(std::move(child), root->GetFirstChild());
+}
+
+void update_background(Component* component, Rml::Element* root) {
+    if (component) {
+        component->update();
+        disable_decoration_input(root);
+    }
+}
 
 }  // namespace
 
 Window::Window(Props props)
     : Document(window_document_source(props.styleSheets), false, kScopeWindow),
       mRoot(mDocument->GetElementById("window")) {
+    if (props.background) {
+        mBackgroundRoot = create_background_root(mRoot);
+        mBackground = props.background(mBackgroundRoot);
+        disable_decoration_input(mBackgroundRoot);
+    }
     if (props.tabBar) {
         mTabBar = std::make_unique<TabBar>(mRoot, TabBar::Props{
                                                       .onClose = [this] { request_close(); },
@@ -136,6 +175,7 @@ void Window::hide(bool close) {
 }
 
 void Window::update() {
+    update_background(mBackground.get(), mBackgroundRoot);
     update_safe_area();
     for (const auto& component : mContentComponents) {
         component->update();
@@ -330,8 +370,8 @@ bool Window::handle_content_nav(Rml::Event& event, NavCommand cmd) noexcept {
     return false;
 }
 
-WindowSmall::WindowSmall(const Rml::String& windowClass)
-    : Document(kDocumentSourceSmall, false, kScopeWindow),
+WindowSmall::WindowSmall(Props props)
+    : Document(small_document_source(props.styleSheets), false, kScopeWindow),
       mRoot(mDocument->GetElementById("window")), mDialog(mDocument->GetElementById("dialog")) {
     listen(mRoot, Rml::EventId::Transitionend, [this](Rml::Event& event) {
         if (event.GetTargetElement() == mRoot && !mRoot->HasAttribute("open") &&
@@ -341,7 +381,17 @@ WindowSmall::WindowSmall(const Rml::String& windowClass)
         }
     });
 
-    mRoot->SetClass(windowClass, true);
+    mRoot->SetClass(props.windowClass, true);
+    if (props.background) {
+        mBackgroundRoot = create_background_root(mRoot);
+        mBackground = props.background(mBackgroundRoot);
+        disable_decoration_input(mBackgroundRoot);
+    }
+}
+
+void WindowSmall::update() {
+    update_background(mBackground.get(), mBackgroundRoot);
+    Document::update();
 }
 
 void WindowSmall::show() {

@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace borealis::ui {
 class Document;
@@ -109,6 +110,14 @@ bool any_document_visible() noexcept;
 bool is_prelaunch_open() noexcept;
 bool game_obscured_below(const Document& doc) noexcept;
 Document* top_document() noexcept;
+
+struct ShellStylesheets {
+    std::vector<Rml::String> window{"res/rml/theme.rcss", "res/rml/controls.rcss"};
+    std::vector<Rml::String> windowSmall{"res/rml/theme.rcss", "res/rml/controls.rcss"};
+    std::vector<Rml::String> menuBar{"res/rml/theme.rcss"};
+};
+void set_shell_stylesheets(ShellStylesheets sheets) noexcept;
+const ShellStylesheets& shell_stylesheets() noexcept;
 
 // Defaults to "res/rml/global.rcss"
 void set_global_stylesheet(std::string path) noexcept;

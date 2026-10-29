@@ -8,6 +8,8 @@
 
 namespace borealis::ui {
 
+using WindowBackgroundFactory = std::function<std::unique_ptr<Component>(Rml::Element*)>;
+
 class Window : public Document {
 public:
     using TabBuilder = std::function<void(Rml::Element*)>;
@@ -19,6 +21,7 @@ public:
     struct Props {
         bool tabBar = true;
         std::vector<Rml::String> styleSheets;
+        WindowBackgroundFactory background;
     };
 
     Window() : Window(Props{}) {}
@@ -56,6 +59,8 @@ protected:
         return ref;
     }
 
+    std::unique_ptr<Component> mBackground;
+    Rml::Element* mBackgroundRoot = nullptr;
     Rml::Element* mRoot;
     Rml::Element* mContentRoot;
     std::unique_ptr<TabBar> mTabBar;
@@ -70,13 +75,22 @@ protected:
 // Shared shell for small-style windows such as Modal
 class WindowSmall : public Document {
 public:
-    explicit WindowSmall(const Rml::String& windowClass);
+    struct Props {
+        Rml::String windowClass;
+        std::vector<Rml::String> styleSheets;
+        WindowBackgroundFactory background;
+    };
+    explicit WindowSmall(const Rml::String& windowClass) : WindowSmall(Props{.windowClass = windowClass}) {}
+    explicit WindowSmall(Props props);
 
     void show() override;
     void hide(bool close) override;
     bool visible() const override;
+    void update() override;
 
 protected:
+    std::unique_ptr<Component> mBackground;
+    Rml::Element* mBackgroundRoot = nullptr;
     Rml::Element* mRoot = nullptr;
     Rml::Element* mDialog = nullptr;
 };

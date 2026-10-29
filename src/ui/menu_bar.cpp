@@ -1,5 +1,7 @@
 #include <borealis/ui/menu_bar.hpp>
 
+#include "internal.hpp"
+
 #include <borealis/ui/ui.hpp>
 
 #include <RmlUi/Core.h>
@@ -13,14 +15,12 @@ namespace borealis::ui {
 namespace {
 
 Rml::String menu_bar_document_source(const std::vector<Rml::String>& styleSheets) {
-    Rml::String links;
-    for (const auto& sheet : styleSheets) {
-        links += fmt::format("    <link type=\"text/rcss\" href=\"{}\" />\n", sheet);
-    }
+    const auto links = detail::stylesheet_links(shell_stylesheets().menuBar);
+    const auto extraLinks = detail::stylesheet_links(styleSheets);
     return fmt::format(R"RML(
 <rml>
 <head>
-    <link type="text/rcss" href="res/rml/theme.rcss" />
+{}
     <link type="text/rcss" href="res/rml/tabbing.rcss" />
     <link type="text/rcss" href="res/rml/popup.rcss" />
 {}</head>
@@ -29,7 +29,7 @@ Rml::String menu_bar_document_source(const std::vector<Rml::String>& styleSheets
 </body>
 </rml>
 )RML",
-        links);
+        links, extraLinks);
 }
 
 }  // namespace
