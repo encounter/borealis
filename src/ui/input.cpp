@@ -666,7 +666,7 @@ bool text_input_focused() noexcept {
         return false;
     }
     const auto type = focus->GetAttribute<Rml::String>("type", "text");
-    return type == "text" || type == "password";
+    return type == "text" || type == "password" || type == "number";
 }
 
 void handle_cancel(const InputEvent& event) noexcept {
