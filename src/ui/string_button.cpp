@@ -145,8 +145,8 @@ void BaseStringButton::focus_input() {
         return;
     }
 
-    aurora::rmlui::set_input_type(
-        mType == "number" ? aurora::rmlui::InputType::Number : aurora::rmlui::InputType::Text);
+    aurora::rmlui::set_input_type(mType == "number" ? aurora::input::TextInputType::Number :
+                                                      aurora::input::TextInputType::Text);
 
     if (mInputElem->Focus(true)) {
         const int end = static_cast<int>(Rml::StringUtilities::LengthUTF8(mInputElem->GetValue()));

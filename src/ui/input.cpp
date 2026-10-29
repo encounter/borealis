@@ -833,11 +833,13 @@ void initialize() noexcept {
         .onEvent = on_event,
         .capturesSource = captures_source,
     });
+    aurora::rmlui::set_input_layer(sLayer);
     sKeyboard.assign(keyboard_bindings());
     sync_contexts();
 }
 
 void shutdown() noexcept {
+    aurora::rmlui::set_input_layer(aurora::input::kInvalidLayerId);
     if (sLayer != aurora::input::kInvalidLayerId) {
         aurora::input::unregister_layer(std::exchange(sLayer, aurora::input::kInvalidLayerId));
     }
